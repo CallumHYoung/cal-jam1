@@ -26,8 +26,9 @@ const incoming = Portal.readPortalParams();
 usernameEl.textContent = incoming.username;
 const myColorHex = '#' + (incoming.color || 'c64bff');
 
-const nextTarget = await Portal.pickPortalTarget();
-if (nextTarget) portalBtnEl.textContent = '→ ' + nextTarget.title;
+// Random fallback target for the corner button. Populated asynchronously
+// once the registry loads — same fetch powers the walk-in portal gates.
+let nextTarget = null;
 portalBtnEl.addEventListener('click', () => {
   if (!nextTarget) return;
   Portal.sendPlayerThroughPortal(nextTarget.url, {
@@ -102,6 +103,139 @@ const signPost = new THREE.Mesh(
 );
 signPost.position.set(0, 1.4, -12);
 scene.add(signPost);
+
+// ----- Portal gates (Ordinary Game Jam Portal protocol) -----
+// A row of glowing ring portals placed next to the spawn. Each portal is
+// one registered jam game (fetched via portal.js). Walking into the ring
+// triggers Portal.sendPlayerThroughPortal for that game's URL.
+const PORTAL_TRIGGER_DIST = 1.7;
+const portals = [];
+
+function makePortal(game, x, z, accent) {
+  const g = new THREE.Group();
+  g.position.set(x, 0, z);
+
+  // Stone pedestal
+  const base = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.8, 1.05, 0.35, 18),
+    new THREE.MeshStandardMaterial({ color: 0x2a1836, metalness: 0.45, roughness: 0.7 })
+  );
+  base.position.y = 0.18;
+  base.castShadow = true;
+  base.receiveShadow = true;
+  g.add(base);
+
+  // Glowing ring
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(1.3, 0.14, 18, 36),
+    new THREE.MeshStandardMaterial({
+      color: accent, emissive: accent, emissiveIntensity: 0.8,
+      metalness: 0.5, roughness: 0.25
+    })
+  );
+  ring.position.y = 1.85;
+  ring.castShadow = true;
+  g.add(ring);
+
+  // Swirling inner surface
+  const surface = new THREE.Mesh(
+    new THREE.CircleGeometry(1.25, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0xc64bff, transparent: true, opacity: 0.35, side: THREE.DoubleSide
+    })
+  );
+  surface.position.y = 1.85;
+  g.add(surface);
+
+  // Soft point light so the portal illuminates its surroundings
+  const glow = new THREE.PointLight(accent, 1.4, 9);
+  glow.position.y = 1.85;
+  g.add(glow);
+
+  scene.add(g);
+
+  // HTML label floating above the portal
+  const label = document.createElement('div');
+  label.className = 'nameplate portal-label';
+  label.textContent = '→ ' + game.title;
+  overlay.appendChild(label);
+
+  return {
+    group:   g,
+    ring,
+    surface,
+    glow,
+    label,
+    title:   game.title,
+    url:     game.url,
+    bobPhase: Math.random() * Math.PI * 2,
+  };
+}
+
+async function loadAndPlacePortals() {
+  let games;
+  try {
+    games = await Portal.fetchJamRegistry();
+  } catch (err) {
+    console.warn('[portal] registry fetch failed:', err);
+    return;
+  }
+  const norm = s => s.split('?')[0].replace(/\/$/, '');
+  const here = norm(window.location.href);
+  const others = (games || []).filter(g => g && g.url && norm(g.url) !== here);
+  if (others.length === 0) return;
+
+  // Random pick powers the corner button fallback.
+  nextTarget = others[Math.floor(Math.random() * others.length)];
+  if (portalBtnEl) portalBtnEl.textContent = '→ ' + nextTarget.title;
+
+  // Place one portal per game in a row to the right of the spawn.
+  const count = Math.min(others.length, 8);
+  for (let i = 0; i < count; i++) {
+    const game = others[i];
+    const x = 7 + i * 4.2;
+    const z = 4;
+    const accent = new THREE.Color().setHSL(((i / count) * 0.85 + 0.55) % 1, 0.75, 0.6);
+    portals.push(makePortal(game, x, z, accent));
+  }
+}
+loadAndPlacePortals();
+
+function updatePortals(dt) {
+  if (portals.length === 0) return;
+  const t = performance.now() * 0.001;
+  for (const p of portals) {
+    const pulse = 0.65 + Math.sin(t * 2.2 + p.bobPhase) * 0.3;
+    p.ring.material.emissiveIntensity = pulse;
+    p.surface.material.opacity = 0.28 + pulse * 0.18;
+    const bob = Math.sin(t * 1.4 + p.bobPhase) * 0.09;
+    p.ring.position.y    = 1.85 + bob;
+    p.surface.position.y = 1.85 + bob;
+    // Label projection
+    const pos = p.group.position.clone();
+    pos.y = 3.5 + bob;
+    projectLabel(p.label, pos);
+  }
+}
+
+function checkPortalCollision() {
+  if (portals.length === 0) return;
+  // Only allow portal travel when you're walking around normally.
+  if (phase !== 'overworld') return;
+  if (isSpectating) return;
+  for (const p of portals) {
+    const dx = me.pos.x - p.group.position.x;
+    const dz = me.pos.z - p.group.position.z;
+    if (dx * dx + dz * dz < PORTAL_TRIGGER_DIST * PORTAL_TRIGGER_DIST) {
+      Portal.sendPlayerThroughPortal(p.url, {
+        username: me.username,
+        color:    incoming.color,
+        speed:    incoming.speed,
+      });
+      return;
+    }
+  }
+}
 
 // ----- Arena -----
 const ARENA_CENTER = new THREE.Vector3(0, 0, -60);
@@ -1528,11 +1662,13 @@ function tick() {
 
   updateSpectating();
   updateMovement(dt);
+  checkPortalCollision();
   updatePhase(dt);
   updateAvatars(dt);
   if (phase === 'duel-revealing') animateDuelReveal();
   updateSpectators(dt);
   updateTomatoes(dt);
+  updatePortals(dt);
   updateCamera();
   updateNameplates();
 

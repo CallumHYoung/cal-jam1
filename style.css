@@ -216,3 +216,12 @@ html, body {
   pointer-events: none;
   text-shadow: 0 0 6px var(--accent);
 }
+
+.nameplate.portal-label {
+  color: var(--accent3);
+  border-color: var(--accent3);
+  text-shadow: 0 0 8px var(--accent3);
+  padding: 3px 10px;
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+}
