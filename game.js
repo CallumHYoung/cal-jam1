@@ -354,7 +354,7 @@ function lockMoveHint(n) {
 function showTimer(v) { timerEl.classList.toggle('hidden', !v); }
 
 const HINTS = {
-  'overworld':           'WASD to move • F to challenge nearby opponent',
+  'overworld':           'Click to look • WASD to move • F to challenge nearby opponent',
   'challenge-sent':      'Challenge sent — waiting for response…',
   'challenge-received':  'Press Y to accept • N to decline',
   'entering-arena':      'Entering the arena…',
@@ -565,6 +565,8 @@ function handleChallenge(data) {
 // ====================================================================
 
 function beginDuel() {
+  // Release the mouse so the arena cinematic cam isn't fighting pointer-lock input.
+  if (document.pointerLockElement === canvas) document.exitPointerLock();
   phase = 'entering-arena';
   phaseTimer = performance.now() + 2000;
   me.duelScore = 0;
@@ -760,6 +762,26 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 
+// Mouse look (pointer lock). Click the canvas to capture; Esc to release.
+// camYaw is the angle such that the camera sits at
+//   player + (sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)) * dist.
+// camYaw = 0 puts the camera on the +Z side of the player looking toward -Z.
+let camYaw = 0;
+let camPitch = 0.28;
+const CAM_DIST = 9;
+
+canvas.addEventListener('click', () => {
+  if (phase !== 'overworld' && phase !== 'challenge-sent' && phase !== 'challenge-received') return;
+  if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== canvas) return;
+  camYaw   -= e.movementX * 0.0025;
+  camPitch -= e.movementY * 0.0025;
+  // Clamp pitch: don't cross the horizon or look straight down.
+  camPitch = Math.max(-0.15, Math.min(0.95, camPitch));
+});
+
 // ====================================================================
 // Update + animation
 // ====================================================================
@@ -816,18 +838,22 @@ function animateDuelReveal() {
 
 function updateMovement(dt) {
   if (phase !== 'overworld') return;
-  let dx = 0, dz = 0;
-  if (keys.has('w') || keys.has('arrowup'))    dz -= 1;
-  if (keys.has('s') || keys.has('arrowdown'))  dz += 1;
-  if (keys.has('a') || keys.has('arrowleft'))  dx -= 1;
-  if (keys.has('d') || keys.has('arrowright')) dx += 1;
-  if (dx || dz) {
-    const len = Math.hypot(dx, dz);
-    dx /= len; dz /= len;
+  let fwd = 0, str = 0;
+  if (keys.has('w') || keys.has('arrowup'))    fwd += 1;
+  if (keys.has('s') || keys.has('arrowdown'))  fwd -= 1;
+  if (keys.has('d') || keys.has('arrowright')) str += 1;
+  if (keys.has('a') || keys.has('arrowleft'))  str -= 1;
+  if (fwd || str) {
+    const len = Math.hypot(fwd, str);
+    fwd /= len; str /= len;
+    // Forward direction (away from the camera, horizontal only).
+    const sY = Math.sin(camYaw), cY = Math.cos(camYaw);
+    const mvx = -sY * fwd + cY * str;
+    const mvz = -cY * fwd - sY * str;
     const speed = Math.max(3, incoming.speed || 6);
-    me.pos.x += dx * speed * dt;
-    me.pos.z += dz * speed * dt;
-    me.rot = Math.atan2(dx, dz) + Math.PI;
+    me.pos.x += mvx * speed * dt;
+    me.pos.z += mvz * speed * dt;
+    me.rot = Math.atan2(mvx, mvz) + Math.PI;
   }
   me.pos.x = Math.max(-120, Math.min(120, me.pos.x));
   me.pos.z = Math.max(-25, Math.min(120, me.pos.z));
@@ -907,12 +933,17 @@ function updateCamera() {
     targetPos = ARENA_CENTER.clone().add(new THREE.Vector3(0, 5.5, 12));
     lookAt    = ARENA_CENTER.clone().add(new THREE.Vector3(0, 1.4, 0));
   } else {
-    // 3rd person chase
-    const behind = new THREE.Vector3(Math.sin(me.rot) * 9, 6.5, Math.cos(me.rot) * 9);
-    targetPos = me.pos.clone().add(behind);
+    // Mouse-look orbit: camera sits behind the player at spherical offset.
+    const cp = Math.cos(camPitch);
+    const offset = new THREE.Vector3(
+      Math.sin(camYaw) * cp * CAM_DIST,
+      Math.sin(camPitch) * CAM_DIST + 2.2,
+      Math.cos(camYaw) * cp * CAM_DIST,
+    );
+    targetPos = me.pos.clone().add(offset);
     lookAt    = me.pos.clone().add(new THREE.Vector3(0, 1.4, 0));
   }
-  camera.position.lerp(targetPos, 0.12);
+  camera.position.lerp(targetPos, 0.18);
   camera.lookAt(lookAt);
 }
 
