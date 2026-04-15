@@ -26,6 +26,162 @@ const incoming = Portal.readPortalParams();
 usernameEl.textContent = incoming.username;
 const myColorHex = '#' + (incoming.color || 'c64bff');
 
+// ====================================================================
+// Audio — synthesized WebAudio SFX (no binary assets)
+// ====================================================================
+
+const AudioCtor = window.AudioContext || window.webkitAudioContext;
+const audioCtx = AudioCtor ? new AudioCtor() : null;
+// Master gain so we can mix everything at a sane level.
+const masterGain = audioCtx ? audioCtx.createGain() : null;
+if (masterGain) {
+  masterGain.gain.value = 0.6;
+  masterGain.connect(audioCtx.destination);
+}
+
+function unlockAudio() {
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playClang() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [1780, 2460, 3150].forEach(f => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(f, now);
+    osc.frequency.exponentialRampToValueAtTime(f * 0.82, now + 0.35);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.12, now + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0005, now + 0.4);
+    osc.connect(gain).connect(masterGain);
+    osc.start(now);
+    osc.stop(now + 0.45);
+  });
+}
+
+function playSplat() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const duration = 0.22;
+  const bufSize = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+  const buffer = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) {
+    data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufSize, 1.5);
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 720;
+  filter.Q.value = 1.8;
+  const gain = audioCtx.createGain();
+  gain.gain.value = 0.35;
+  src.connect(filter).connect(gain).connect(masterGain);
+  src.start(now);
+  src.stop(now + duration + 0.02);
+}
+
+function playTick() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.value = 880;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.14, now + 0.005);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+  osc.connect(gain).connect(masterGain);
+  osc.start(now);
+  osc.stop(now + 0.1);
+}
+
+function playFanfare() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    const gain = audioCtx.createGain();
+    const start = now + i * 0.13;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.1, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + 0.35);
+    osc.connect(gain).connect(masterGain);
+    osc.start(start);
+    osc.stop(start + 0.4);
+  });
+}
+
+function playCheer() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  const duration = 1.8;
+  const bufSize = Math.max(1, Math.floor(audioCtx.sampleRate * duration));
+  const buffer = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.value = 1250;
+  filter.Q.value = 0.85;
+  const gain = audioCtx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.16, now + 0.2);
+  gain.gain.linearRampToValueAtTime(0.2, now + 0.9);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+  src.connect(filter).connect(gain).connect(masterGain);
+  src.start(now);
+  src.stop(now + duration + 0.05);
+}
+
+function playDefeat() {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  [392, 349.23, 293.66].forEach((freq, i) => {
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sawtooth';
+    osc.frequency.value = freq;
+    const gain = audioCtx.createGain();
+    const start = now + i * 0.2;
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(0.09, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, start + 0.5);
+    osc.connect(gain).connect(masterGain);
+    osc.start(start);
+    osc.stop(start + 0.55);
+  });
+}
+
+// ====================================================================
+// Welcome card + first interaction (unlocks audio too)
+// ====================================================================
+
+const welcomeCardEl = document.getElementById('welcomeCard');
+let welcomeHidden = false;
+
+function hideWelcome() {
+  if (welcomeHidden || !welcomeCardEl) return;
+  welcomeHidden = true;
+  welcomeCardEl.classList.add('fading');
+  setTimeout(() => welcomeCardEl.classList.add('hidden'), 260);
+}
+
+function onFirstGesture() {
+  unlockAudio();
+  hideWelcome();
+}
+addEventListener('keydown', onFirstGesture);
+addEventListener('pointerdown', onFirstGesture);
+// Auto-dismiss after 20s in case the player just watches.
+setTimeout(hideWelcome, 20000);
+
 // Random fallback target for the corner button. Populated asynchronously
 // once the registry loads — same fetch powers the walk-in portal gates.
 let nextTarget = null;
@@ -529,6 +685,15 @@ function throwSpectatorTomato() {
   }
 }
 
+function tomatoHitsAvatar(tomatoPos, avatarPos) {
+  // Cheap cylinder collision around the avatar's body.
+  const dx = tomatoPos.x - avatarPos.x;
+  const dz = tomatoPos.z - avatarPos.z;
+  if (dx * dx + dz * dz > 0.6 * 0.6) return false;
+  const dy = tomatoPos.y - avatarPos.y;
+  return dy > 0.2 && dy < 2.4;
+}
+
 function updateTomatoes(dt) {
   const now = performance.now();
   // NPC crowd chucks tomatoes whenever there's a duel we can see.
@@ -545,10 +710,71 @@ function updateTomatoes(dt) {
     t.mesh.rotation.y += t.spin.y * dt;
     t.mesh.rotation.z += t.spin.z * dt;
     t.life -= dt;
-    if (t.life <= 0 || t.mesh.position.y < -0.2) {
+
+    // Player impact — splat on the target and remove.
+    const tpos = t.mesh.position;
+    let hit = tomatoHitsAvatar(tpos, me.avatar.group.position);
+    if (!hit) {
+      for (const p of peers.values()) {
+        if (tomatoHitsAvatar(tpos, p.avatar.group.position)) { hit = true; break; }
+      }
+    }
+    if (hit) {
+      spawnSplat(tpos.x, tpos.z, 1.1);
+      playSplat();
+      scene.remove(t.mesh);
+      tomatoes.splice(i, 1);
+      continue;
+    }
+
+    // Ground impact — splat where it lands.
+    if (t.mesh.position.y < -0.05) {
+      spawnSplat(tpos.x, tpos.z, 0.85);
+      playSplat();
+      scene.remove(t.mesh);
+      tomatoes.splice(i, 1);
+      continue;
+    }
+
+    // Lifetime fallback — fizzle out silently.
+    if (t.life <= 0) {
       scene.remove(t.mesh);
       tomatoes.splice(i, 1);
     }
+  }
+}
+
+// --- Tomato splat decals — flat circles that fade out on the ground. ---
+const splats = [];
+const SPLAT_LIFE = 7.0;
+
+function spawnSplat(x, z, sizeMul = 1.0) {
+  const radius = (0.32 + Math.random() * 0.18) * sizeMul;
+  const geo = new THREE.CircleGeometry(radius, 14);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0xa81a1a, transparent: true, opacity: 0.85,
+    side: THREE.DoubleSide, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.rotation.z = Math.random() * Math.PI * 2;
+  mesh.position.set(x, 0.02, z);
+  scene.add(mesh);
+  splats.push({ mesh, geo, mat, life: SPLAT_LIFE });
+}
+
+function updateSplats(dt) {
+  for (let i = splats.length - 1; i >= 0; i--) {
+    const s = splats[i];
+    s.life -= dt;
+    if (s.life <= 0) {
+      scene.remove(s.mesh);
+      s.geo.dispose();
+      s.mat.dispose();
+      splats.splice(i, 1);
+      continue;
+    }
+    if (s.life < 2.0) s.mat.opacity = (s.life / 2.0) * 0.85;
   }
 }
 
@@ -884,6 +1110,7 @@ let lastMoves  = null;    // { me, opp }
 let duelWinner = null;    // 'me' | 'opp'
 let duelPartnerId = null; // peerId of the current duel opponent
 let iAmHost = false;      // lower peer id drives rounds
+let lastPickSecond = -1;  // drives the pick-phase countdown tick SFX
 
 // Rock-paper-scissors: Thrust beats Feint, Feint beats Parry, Parry beats Thrust
 const MOVE_NAME     = { 1: 'Thrust', 2: 'Parry', 3: 'Feint' };
@@ -1223,6 +1450,7 @@ function startRound(idx) {
   me.duelMove = null;
   partner.duelMove = null;
   pickDeadline = performance.now() + 4000;
+  lastPickSecond = -1;
   resetDuelPose(me.avatar);
   resetDuelPose(partner.avatar);
   showCenterMsg(`Round ${roundIndex} — lock in your move!`);
@@ -1265,6 +1493,7 @@ function revealRound() {
   revealDeadline = performance.now() + 2000;
   showMoveHints(false);
   showTimer(false);
+  playClang();
 
   const mv = me.duelMove || 1;
   const ov = partner.duelMove || 1;
@@ -1312,6 +1541,8 @@ function endDuel() {
     me.hasCrown = true;
     me.avatar.crown.visible = true;
     showCenterMsg('★ VICTORY ★\nThe crown is yours!');
+    playFanfare();
+    playCheer();
   } else {
     if (me.hasCrown) {
       me.hasCrown = false;
@@ -1320,6 +1551,7 @@ function endDuel() {
     } else {
       showCenterMsg('DEFEAT');
     }
+    playDefeat();
   }
   broadcastSelf();
 }
@@ -1526,7 +1758,12 @@ function updatePhase(dt) {
   } else if (phase === 'duel-picking') {
     const partner = duelPartner();
     const remain = Math.max(0, pickDeadline - now);
-    timerEl.textContent = Math.ceil(remain / 1000);
+    const secLeft = Math.ceil(remain / 1000);
+    if (secLeft !== lastPickSecond) {
+      if (secLeft > 0 && secLeft <= 4) playTick();
+      lastPickSecond = secLeft;
+    }
+    timerEl.textContent = secLeft;
     if (remain <= 0 && me.duelMove == null) {
       pickMove(1); // auto-thrust on timeout
     }
@@ -1670,6 +1907,7 @@ function tick() {
   if (phase === 'duel-revealing') animateDuelReveal();
   updateSpectators(dt);
   updateTomatoes(dt);
+  updateSplats(dt);
   updatePortals(dt);
   updateCamera();
   updateNameplates();

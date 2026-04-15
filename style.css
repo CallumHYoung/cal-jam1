@@ -225,3 +225,63 @@ html, body {
   font-size: 0.82rem;
   letter-spacing: 0.03em;
 }
+
+#welcomeCard {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(10, 5, 20, 0.92);
+  border: 2px solid var(--accent);
+  border-radius: 14px;
+  padding: 2rem 2.5rem 1.6rem;
+  max-width: 640px;
+  z-index: 40;
+  box-shadow: 0 0 80px rgba(198, 75, 255, 0.65);
+  text-align: center;
+  transition: opacity 0.25s ease-out;
+}
+
+#welcomeCard.fading { opacity: 0; }
+#welcomeCard.hidden { display: none; }
+
+#welcomeCard h2 {
+  margin: 0 0 1.3rem;
+  font-size: 1.9rem;
+  color: var(--accent2);
+  text-shadow: 0 0 12px var(--accent2);
+  letter-spacing: 0.06em;
+}
+
+#welcomeCard .rows > div {
+  margin: 0.5rem 0;
+  font-size: 0.95rem;
+  opacity: 0.94;
+}
+
+#welcomeCard .rows .triangle {
+  margin-top: 0.15rem;
+  font-size: 0.82rem;
+  opacity: 0.75;
+  color: var(--accent3);
+  text-shadow: 0 0 8px rgba(79, 240, 255, 0.5);
+}
+
+#welcomeCard .key {
+  display: inline-block;
+  background: var(--accent);
+  color: #0a0514;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-weight: 800;
+  font-size: 0.82rem;
+  margin: 0 2px;
+}
+
+#welcomeCard .dismiss {
+  margin-top: 1.35rem;
+  opacity: 0.55;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
