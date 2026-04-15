@@ -3,16 +3,38 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>My Ordinary Game Jam Game</title>
+<title>Cal-Jam Fencing Duel</title>
 <link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://esm.sh/three@0.160.0"
+  }
+}
+</script>
 </head>
 <body>
+<canvas id="game"></canvas>
 <div id="hud">
   <div id="username">loading…</div>
-  <div id="peers">1 online</div>
-  <div id="hint">WASD / arrows to move — walk into a portal to travel</div>
+  <div id="peers">connecting…</div>
+  <div id="hint">WASD to move • F to challenge nearby opponent</div>
 </div>
-<canvas id="game" width="960" height="540"></canvas>
+<div id="overlay">
+  <div id="scorePanel" class="hidden">
+    <div id="scoreMe">0</div>
+    <div id="scoreSep">—</div>
+    <div id="scoreOpp">0</div>
+  </div>
+  <div id="centerMsg" class="hidden"></div>
+  <div id="timer" class="hidden">4</div>
+  <div id="moveHints" class="hidden">
+    <div class="moveKey" data-move="1"><span class="k">1</span> Thrust</div>
+    <div class="moveKey" data-move="2"><span class="k">2</span> Parry</div>
+    <div class="moveKey" data-move="3"><span class="k">3</span> Feint</div>
+  </div>
+</div>
+<button id="portalBtn">no portal</button>
 <script src="portal.js"></script>
 <script type="module" src="game.js"></script>
 </body>
