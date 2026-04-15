@@ -155,6 +155,188 @@ for (let i = 0; i < 8; i++) {
   arena.add(flame);
 }
 
+// --- Spectator stands: a raised ring of benches full of cheering NPCs ---
+const STAND_INNER = 13.5;
+const STAND_OUTER = 18.5;
+const STAND_H     = 1.2;
+
+{
+  // Ring platform for the stands (ExtrudeGeometry with a hole = flat annulus)
+  const ringShape = new THREE.Shape();
+  ringShape.absarc(0, 0, STAND_OUTER, 0, Math.PI * 2, false);
+  const holePath = new THREE.Path();
+  holePath.absarc(0, 0, STAND_INNER, 0, Math.PI * 2, true);
+  ringShape.holes.push(holePath);
+  const standGeo = new THREE.ExtrudeGeometry(ringShape, {
+    depth: STAND_H, bevelEnabled: false, curveSegments: 48,
+  });
+  const standMesh = new THREE.Mesh(
+    standGeo,
+    new THREE.MeshStandardMaterial({ color: 0x2a1836, roughness: 0.9 })
+  );
+  standMesh.rotation.x = -Math.PI / 2;
+  standMesh.position.y = STAND_H;
+  standMesh.receiveShadow = true;
+  arena.add(standMesh);
+
+  // Low retaining wall between the pit and the stands
+  const wall = new THREE.Mesh(
+    new THREE.CylinderGeometry(STAND_INNER, STAND_INNER, 0.6, 48, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: 0x4a2866, metalness: 0.4, roughness: 0.55, side: THREE.DoubleSide
+    })
+  );
+  wall.position.y = STAND_H + 0.3;
+  arena.add(wall);
+}
+
+// Spectators: simple bodied NPCs on the ring. We store references so we can
+// bob them during cheers and throw tomatoes from their positions.
+const spectators = [];
+const SPECTATOR_COUNT = 32;
+for (let i = 0; i < SPECTATOR_COUNT; i++) {
+  const angle = (i / SPECTATOR_COUNT) * Math.PI * 2 + Math.random() * 0.05;
+  const r = STAND_INNER + 0.8 + Math.random() * (STAND_OUTER - STAND_INNER - 2.0);
+  const sx = Math.cos(angle) * r;
+  const sz = Math.sin(angle) * r;
+
+  const spec = new THREE.Group();
+  const hue = Math.random();
+  const bodyColor = new THREE.Color().setHSL(hue, 0.55, 0.45);
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.28, 0.55, 4, 8),
+    new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.8 })
+  );
+  body.position.y = 0.55;
+  body.castShadow = true;
+  spec.add(body);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 10, 8),
+    new THREE.MeshStandardMaterial({ color: 0xffcc99, roughness: 0.8 })
+  );
+  head.position.y = 1.1;
+  spec.add(head);
+  // A tiny cone hat for some of them, just for flavor.
+  if (Math.random() < 0.25) {
+    const hat = new THREE.Mesh(
+      new THREE.ConeGeometry(0.2, 0.35, 10),
+      new THREE.MeshStandardMaterial({
+        color: new THREE.Color().setHSL((hue + 0.35) % 1, 0.7, 0.5)
+      })
+    );
+    hat.position.y = 1.35;
+    spec.add(hat);
+  }
+
+  spec.position.set(sx, STAND_H, sz);
+  // Face the arena center (local origin of the arena group)
+  spec.lookAt(0, STAND_H + 1.0, 0);
+  arena.add(spec);
+
+  spectators.push({
+    group: spec,
+    baseY: STAND_H,
+    bobPhase: Math.random() * Math.PI * 2,
+  });
+}
+
+function isArenaPhase() {
+  return (
+    phase === 'entering-arena' || phase === 'duel-picking' ||
+    phase === 'duel-revealing' || phase === 'duel-settle' ||
+    phase === 'duel-over'
+  );
+}
+
+function updateSpectators(dt) {
+  const t = performance.now() * 0.003;
+  const excited = isArenaPhase();
+  for (const s of spectators) {
+    const amp = excited ? 0.22 : 0.05;
+    const speed = excited ? 2.2 : 0.9;
+    s.group.position.y = s.baseY + Math.abs(Math.sin(t * speed + s.bobPhase)) * amp;
+  }
+}
+
+// --- Rotten tomatoes: purely cosmetic projectiles from the stands ---
+const TOMATO_GEO = new THREE.SphereGeometry(0.19, 12, 10);
+const TOMATO_MAT = new THREE.MeshStandardMaterial({
+  color: 0xa81a1a, roughness: 0.55, emissive: 0x220000, emissiveIntensity: 0.3
+});
+const TOMATO_GRAVITY = 22;
+const tomatoes = [];
+let nextTomatoAt = 0;
+
+function spawnTomato() {
+  if (spectators.length === 0) return;
+  const partner = duelPartner();
+  // Pick a random spectator and a random target (me or the partner in the arena).
+  const s = spectators[Math.floor(Math.random() * spectators.length)];
+  const fromWorld = new THREE.Vector3();
+  s.group.getWorldPosition(fromWorld);
+  fromWorld.y += 1.1;
+
+  const targets = [];
+  if (isArenaPhase()) {
+    targets.push(me.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+    if (partner) targets.push(partner.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+  }
+  if (targets.length === 0) return;
+  const target = targets[Math.floor(Math.random() * targets.length)];
+  // Spray miss so they don't all splat the same spot.
+  target.x += (Math.random() - 0.5) * 2.2;
+  target.z += (Math.random() - 0.5) * 2.2;
+
+  const flightTime = 1.15 + Math.random() * 0.35;
+  const vx = (target.x - fromWorld.x) / flightTime;
+  const vz = (target.z - fromWorld.z) / flightTime;
+  const vy = (target.y - fromWorld.y + 0.5 * TOMATO_GRAVITY * flightTime * flightTime) / flightTime;
+
+  const mesh = new THREE.Mesh(TOMATO_GEO, TOMATO_MAT);
+  mesh.position.copy(fromWorld);
+  mesh.castShadow = true;
+  // Little green stem nub
+  const stem = new THREE.Mesh(
+    new THREE.ConeGeometry(0.05, 0.1, 6),
+    new THREE.MeshStandardMaterial({ color: 0x3a8a3a })
+  );
+  stem.position.y = 0.18;
+  mesh.add(stem);
+  scene.add(mesh);
+
+  tomatoes.push({
+    mesh,
+    vel: new THREE.Vector3(vx, vy, vz),
+    spin: new THREE.Vector3(
+      (Math.random() - 0.5) * 14,
+      (Math.random() - 0.5) * 14,
+      (Math.random() - 0.5) * 14
+    ),
+    life: flightTime + 1.0,
+  });
+}
+
+function updateTomatoes(dt) {
+  const now = performance.now();
+  if (isArenaPhase() && now >= nextTomatoAt) {
+    spawnTomato();
+    nextTomatoAt = now + 450 + Math.random() * 700;
+  }
+  for (let i = tomatoes.length - 1; i >= 0; i--) {
+    const t = tomatoes[i];
+    t.vel.y -= TOMATO_GRAVITY * dt;
+    t.mesh.position.addScaledVector(t.vel, dt);
+    t.mesh.rotation.x += t.spin.x * dt;
+    t.mesh.rotation.y += t.spin.y * dt;
+    t.mesh.rotation.z += t.spin.z * dt;
+    t.life -= dt;
+    if (t.life <= 0 || t.mesh.position.y < -0.2) {
+      scene.remove(t.mesh);
+      tomatoes.splice(i, 1);
+    }
+  }
+}
+
 // ====================================================================
 // Avatar construction
 // ====================================================================
@@ -162,106 +344,240 @@ for (let i = 0; i < 8; i++) {
 function makeAvatar(colorHex) {
   const g = new THREE.Group();
   const color = new THREE.Color(colorHex);
+  const bodyMat = new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.15 });
+  const skinMat = new THREE.MeshStandardMaterial({ color: 0xffcc99, roughness: 0.75 });
+  const trouserMat = new THREE.MeshStandardMaterial({ color: 0x221133, roughness: 0.85 });
+  const bootMat = new THREE.MeshStandardMaterial({ color: 0x0f0b1c, roughness: 0.5 });
 
-  const body = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.42, 1.0, 6, 14),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.6 })
-  );
-  body.position.y = 1.0;
-  body.castShadow = true;
-  g.add(body);
+  // --- Legs: a hip pivot group so we can swing the whole leg from the joint ---
+  function makeLeg(xSign) {
+    const hip = new THREE.Group();
+    hip.position.set(0.19 * xSign, 0.72, 0);
+    const leg = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.13, 0.1, 0.72, 10),
+      trouserMat
+    );
+    leg.position.y = -0.36;
+    leg.castShadow = true;
+    hip.add(leg);
+    const boot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.25, 0.13, 0.36),
+      bootMat
+    );
+    boot.position.set(0, -0.78, 0.04);
+    boot.castShadow = true;
+    hip.add(boot);
+    return hip;
+  }
+  const hipL = makeLeg(-1);
+  const hipR = makeLeg(+1);
+  g.add(hipL);
+  g.add(hipR);
 
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(0.32, 18, 14),
-    new THREE.MeshStandardMaterial({ color: 0xffddb0, roughness: 0.7 })
+  // --- Upper body group: torso, arms, head, cape, accessories ---
+  const upper = new THREE.Group();
+  g.add(upper);
+
+  // Belt
+  const belt = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.38, 0.38, 0.14, 14),
+    new THREE.MeshStandardMaterial({ color: 0x443322, roughness: 0.55, metalness: 0.4 })
   );
-  head.position.y = 1.95;
+  belt.position.y = 0.82;
+  upper.add(belt);
+  const buckle = new THREE.Mesh(
+    new THREE.BoxGeometry(0.18, 0.13, 0.06),
+    new THREE.MeshStandardMaterial({ color: 0xffd166, metalness: 0.85, roughness: 0.3 })
+  );
+  buckle.position.set(0, 0.82, 0.37);
+  upper.add(buckle);
+
+  // Tapered torso (tunic)
+  const torso = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.44, 0.36, 1.05, 16),
+    bodyMat
+  );
+  torso.position.y = 1.38;
+  torso.castShadow = true;
+  upper.add(torso);
+
+  // Shoulder pads (decorative)
+  const padGeo = new THREE.SphereGeometry(0.2, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+  const padL = new THREE.Mesh(padGeo, bodyMat);
+  padL.position.set(-0.5, 1.92, 0);
+  upper.add(padL);
+  const padR = new THREE.Mesh(padGeo, bodyMat);
+  padR.position.set(0.5, 1.92, 0);
+  upper.add(padR);
+
+  // Arms (shoulder pivot groups so the whole arm swings from the top)
+  function makeArm(xSign) {
+    const shoulder = new THREE.Group();
+    shoulder.position.set(0.5 * xSign, 1.88, 0);
+    const arm = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.1, 0.08, 0.78, 10),
+      bodyMat
+    );
+    arm.position.y = -0.38;
+    arm.castShadow = true;
+    shoulder.add(arm);
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.12, 10, 8), skinMat);
+    hand.position.y = -0.8;
+    shoulder.add(hand);
+    return shoulder;
+  }
+  const shoulderGrpL = makeArm(-1);
+  const shoulderGrpR = makeArm(+1);
+  upper.add(shoulderGrpL);
+  upper.add(shoulderGrpR);
+
+  // Neck
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.12, 8), skinMat);
+  neck.position.y = 2.02;
+  upper.add(neck);
+
+  // Head
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 18, 14), skinMat);
+  head.position.y = 2.22;
   head.castShadow = true;
-  g.add(head);
+  upper.add(head);
 
-  // Armor (hidden outside arena)
+  // Hair cap (upper half-sphere)
+  const hair = new THREE.Mesh(
+    new THREE.SphereGeometry(0.31, 18, 14, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.MeshStandardMaterial({ color: 0x2a1133, roughness: 0.9 })
+  );
+  hair.position.y = 2.24;
+  upper.add(hair);
+
+  // Eyes
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x0a0514 });
+  const eyeGeo = new THREE.SphereGeometry(0.035, 8, 6);
+  const eyeL = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeL.position.set(-0.09, 2.25, 0.27);
+  upper.add(eyeL);
+  const eyeR = new THREE.Mesh(eyeGeo, eyeMat);
+  eyeR.position.set(0.09, 2.25, 0.27);
+  upper.add(eyeR);
+
+  // Cape — a plane that hangs behind, in the player color
+  const cape = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.95, 1.4, 3, 5),
+    new THREE.MeshStandardMaterial({
+      color, side: THREE.DoubleSide, roughness: 0.85,
+      emissive: color, emissiveIntensity: 0.08
+    })
+  );
+  cape.position.set(0, 1.45, -0.32);
+  cape.rotation.x = -0.08;
+  cape.castShadow = true;
+  upper.add(cape);
+
+  // --- Armor (hidden outside the arena) ---
   const armor = new THREE.Group();
   armor.visible = false;
-  const armorMat = new THREE.MeshStandardMaterial({ color: 0xd0d6e0, metalness: 0.9, roughness: 0.22 });
-  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.95, 0.6), armorMat);
-  chest.position.y = 1.25;
+  const armorMat = new THREE.MeshStandardMaterial({ color: 0xd0d6e0, metalness: 0.9, roughness: 0.2 });
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.98, 1.0, 0.65), armorMat);
+  chest.position.y = 1.38;
   chest.castShadow = true;
   armor.add(chest);
-  const shL = new THREE.Mesh(new THREE.SphereGeometry(0.22, 14, 10), armorMat);
-  shL.position.set(-0.56, 1.58, 0);
-  armor.add(shL);
-  const shR = shL.clone();
-  shR.position.set(0.56, 1.58, 0);
-  armor.add(shR);
-  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.36, 18, 14), armorMat);
-  helmet.position.y = 1.95;
+  // Pauldrons
+  const pauldGeo = new THREE.SphereGeometry(0.26, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+  const pauldL = new THREE.Mesh(pauldGeo, armorMat);
+  pauldL.position.set(-0.56, 1.92, 0);
+  armor.add(pauldL);
+  const pauldR = new THREE.Mesh(pauldGeo, armorMat);
+  pauldR.position.set(0.56, 1.92, 0);
+  armor.add(pauldR);
+  // Helmet with a pointy plume
+  const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.38, 18, 14), armorMat);
+  helmet.position.y = 2.22;
   helmet.castShadow = true;
   armor.add(helmet);
   const mask = new THREE.Mesh(
-    new THREE.BoxGeometry(0.55, 0.1, 0.08),
+    new THREE.BoxGeometry(0.6, 0.11, 0.09),
     new THREE.MeshStandardMaterial({ color: 0x0a0514 })
   );
-  mask.position.set(0, 1.95, 0.34);
+  mask.position.set(0, 2.22, 0.38);
   armor.add(mask);
-  g.add(armor);
+  const plume = new THREE.Mesh(
+    new THREE.ConeGeometry(0.09, 0.48, 10),
+    new THREE.MeshStandardMaterial({ color: 0xff4fd8, emissive: 0x440022, emissiveIntensity: 0.4 })
+  );
+  plume.position.set(0, 2.72, -0.1);
+  plume.rotation.x = -0.3;
+  armor.add(plume);
+  upper.add(armor);
 
-  // Sword (hidden outside arena)
+  // --- Sword ---
   const sword = new THREE.Group();
   sword.visible = false;
   const blade = new THREE.Mesh(
-    new THREE.BoxGeometry(0.05, 0.05, 1.3),
-    new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.95, roughness: 0.08, emissive: 0x222244 })
+    new THREE.BoxGeometry(0.05, 0.05, 1.35),
+    new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.95, roughness: 0.07, emissive: 0x223344 })
   );
-  blade.position.z = 0.65;
+  blade.position.z = 0.68;
   sword.add(blade);
   const guard = new THREE.Mesh(
-    new THREE.BoxGeometry(0.28, 0.05, 0.08),
-    new THREE.MeshStandardMaterial({ color: 0xaa7722, metalness: 0.7 })
+    new THREE.BoxGeometry(0.3, 0.05, 0.09),
+    new THREE.MeshStandardMaterial({ color: 0xaa7722, metalness: 0.8 })
   );
   sword.add(guard);
   const hilt = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.04, 0.04, 0.2, 10),
+    new THREE.CylinderGeometry(0.045, 0.045, 0.22, 10),
     new THREE.MeshStandardMaterial({ color: 0x553311 })
   );
   hilt.rotation.x = Math.PI / 2;
-  hilt.position.z = -0.1;
+  hilt.position.z = -0.11;
   sword.add(hilt);
   const pommel = new THREE.Mesh(
-    new THREE.SphereGeometry(0.05, 10, 8),
+    new THREE.SphereGeometry(0.055, 10, 8),
     new THREE.MeshStandardMaterial({ color: 0xffd166, metalness: 0.9 })
   );
-  pommel.position.z = -0.2;
+  pommel.position.z = -0.22;
   sword.add(pommel);
-  sword.position.set(0.6, 1.2, 0.15);
+  sword.position.set(0.64, 1.28, 0.18);
   g.add(sword);
 
-  // Crown (hidden unless champion)
+  // --- Crown (hidden unless champion) ---
   const crown = new THREE.Group();
   crown.visible = false;
   const band = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.38, 0.38, 0.12, 20, 1, true),
+    new THREE.CylinderGeometry(0.4, 0.4, 0.14, 22, 1, true),
     new THREE.MeshStandardMaterial({
-      color: 0xffd166, metalness: 0.95, roughness: 0.15,
-      emissive: 0x332200, emissiveIntensity: 0.6, side: THREE.DoubleSide
+      color: 0xffd166, metalness: 0.95, roughness: 0.12,
+      emissive: 0x332200, emissiveIntensity: 0.7, side: THREE.DoubleSide
     })
   );
-  band.position.y = 2.32;
+  band.position.y = 2.6;
   crown.add(band);
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
     const sp = new THREE.Mesh(
-      new THREE.ConeGeometry(0.07, 0.24, 8),
+      new THREE.ConeGeometry(0.08, 0.28, 8),
       new THREE.MeshStandardMaterial({
-        color: 0xffe066, metalness: 0.9, roughness: 0.15,
-        emissive: 0x332200, emissiveIntensity: 0.6
+        color: 0xffe066, metalness: 0.92, roughness: 0.12,
+        emissive: 0x332200, emissiveIntensity: 0.7
       })
     );
-    sp.position.set(Math.cos(a) * 0.35, 2.48, Math.sin(a) * 0.35);
+    sp.position.set(Math.cos(a) * 0.37, 2.77, Math.sin(a) * 0.37);
     crown.add(sp);
   }
-  g.add(crown);
+  upper.add(crown);
 
-  return { group: g, body, head, armor, sword, crown };
+  return {
+    group: g,
+    upper,
+    body: torso, // alias for emissive flash / API compat
+    torso,
+    head,
+    hipL, hipR,
+    shoulderGrpL, shoulderGrpR,
+    cape,
+    armor,
+    sword,
+    crown,
+  };
 }
 
 // ====================================================================
@@ -277,6 +593,8 @@ const me = {
   hasCrown: false,
   duelScore: 0,
   duelMove:  null,
+  walkPhase: 0,
+  isMoving:  false,
 };
 me.avatar.group.position.copy(me.pos);
 me.avatar.group.rotation.y = me.rot;
@@ -310,6 +628,8 @@ function makePeerState(id) {
     hasCrown:  false,
     duelScore: 0,
     duelMove:  null,
+    walkPhase: 0,
+    isMoving:  false,
   };
 }
 
@@ -856,40 +1176,63 @@ addEventListener('mousemove', e => {
 
 function resetDuelPose(av) {
   av.group.position.y = 0;
-  av.sword.position.set(0.6, 1.2, 0.15);
+  av.upper.position.set(0, 0, 0);
+  av.upper.rotation.set(0, 0, 0);
+  av.sword.position.set(0.64, 1.28, 0.18);
   av.sword.rotation.set(0, 0, 0);
-  av.body.rotation.set(0, 0, 0);
-  av.body.position.set(0, 1.0, 0);
   av.body.material.emissive.setHex(0x000000);
+  // Neutral arms/legs — no walk cycle in the arena.
+  av.hipL.rotation.x = 0;
+  av.hipR.rotation.x = 0;
+  av.shoulderGrpL.rotation.x = 0;
+  av.shoulderGrpR.rotation.x = 0;
 }
 
 function applyMoveAnim(av, move, t, won, lost) {
-  // t is a sin-shaped 0..1..0 curve over the reveal window
+  // t is a sin-shaped 0..1..0 curve over the reveal window.
   if (move === 1) {
-    // Thrust: sword extends forward, body lunges slightly
-    av.sword.position.z = 0.15 + t * 1.1;
-    av.sword.rotation.x = -0.18 * t;
-    av.body.position.z = t * 0.4;
+    // Thrust: sword extends forward, upper body lunges.
+    av.sword.position.z = 0.18 + t * 1.15;
+    av.sword.rotation.x = -0.2 * t;
+    av.upper.position.z = t * 0.45;
+    av.shoulderGrpR.rotation.x = -0.9 * t;
   } else if (move === 2) {
-    // Parry: sword swings up and across
+    // Parry: sword swings up and across, sword arm raised.
     av.sword.rotation.z = -Math.PI * 0.35 * t;
     av.sword.rotation.y = Math.PI * 0.2 * t;
-    av.sword.position.y = t * 0.3;
+    av.sword.position.y = 1.28 + t * 0.35;
+    av.shoulderGrpR.rotation.z = -0.6 * t;
+    av.shoulderGrpR.rotation.x = -0.3 * t;
   } else if (move === 3) {
-    // Feint: sword weaves, body dips
-    av.sword.position.x = 0.6 + Math.sin(t * Math.PI * 3) * 0.35;
-    av.sword.position.z = 0.15 + t * 0.5;
-    av.body.rotation.z = Math.sin(t * Math.PI * 2) * 0.22;
+    // Feint: sword weaves side to side, upper body sways with it.
+    av.sword.position.x = 0.64 + Math.sin(t * Math.PI * 3) * 0.4;
+    av.sword.position.z = 0.18 + t * 0.55;
+    av.upper.rotation.z = Math.sin(t * Math.PI * 2) * 0.25;
+    av.shoulderGrpR.rotation.z = -Math.sin(t * Math.PI * 3) * 0.3;
   }
   if (won) {
-    av.body.position.y = 1.0 + Math.sin(t * Math.PI) * 0.15;
+    av.group.position.y = Math.sin(t * Math.PI) * 0.25;
   }
   if (lost) {
-    av.body.material.emissive.setRGB(t * 0.7, 0, 0);
-    av.body.rotation.x = t * 0.4;
+    av.body.material.emissive.setRGB(t * 0.75, 0, 0);
+    av.upper.rotation.x = -t * 0.4; // lean back from the hit
   } else {
     av.body.material.emissive.setHex(0x000000);
   }
+}
+
+function applyWalkAnim(av, phase, isMoving, dt) {
+  // Blend toward the target pose each frame so stopping/starting is smooth.
+  const k = 1 - Math.exp(-dt * 12);
+  const swing = isMoving ? Math.sin(phase) * 0.75 : 0;
+  const armSwing = isMoving ? Math.sin(phase) * 0.55 : 0;
+  av.hipL.rotation.x          += (swing       - av.hipL.rotation.x)          * k;
+  av.hipR.rotation.x          += (-swing      - av.hipR.rotation.x)          * k;
+  av.shoulderGrpL.rotation.x  += (-armSwing   - av.shoulderGrpL.rotation.x)  * k;
+  av.shoulderGrpR.rotation.x  += (armSwing    - av.shoulderGrpR.rotation.x)  * k;
+  // Tiny head bob while walking.
+  const bob = isMoving ? Math.abs(Math.sin(phase)) * 0.04 : 0;
+  av.upper.position.y += (bob - av.upper.position.y) * k;
 }
 
 function animateDuelReveal() {
@@ -907,13 +1250,15 @@ function animateDuelReveal() {
 }
 
 function updateMovement(dt) {
-  if (phase !== 'overworld') return;
+  if (phase !== 'overworld') { me.isMoving = false; return; }
   let fwd = 0, str = 0;
   if (keys.has('w') || keys.has('arrowup'))    fwd += 1;
   if (keys.has('s') || keys.has('arrowdown'))  fwd -= 1;
   if (keys.has('d') || keys.has('arrowright')) str += 1;
   if (keys.has('a') || keys.has('arrowleft'))  str -= 1;
-  if (fwd || str) {
+  const moving = fwd !== 0 || str !== 0;
+  me.isMoving = moving;
+  if (moving) {
     const len = Math.hypot(fwd, str);
     fwd /= len; str /= len;
     // Forward direction (away from the camera, horizontal only).
@@ -924,6 +1269,7 @@ function updateMovement(dt) {
     me.pos.x += mvx * speed * dt;
     me.pos.z += mvz * speed * dt;
     me.rot = Math.atan2(mvx, mvz) + Math.PI;
+    me.walkPhase += dt * 9;
   }
   me.pos.x = Math.max(-120, Math.min(120, me.pos.x));
   me.pos.z = Math.max(-25, Math.min(120, me.pos.z));
@@ -982,15 +1328,28 @@ function updatePhase(dt) {
   hintEl.textContent = HINTS[phase] || '';
 }
 
-function updateAvatars() {
+function updateAvatars(dt) {
   // During the reveal animation and victory dance we drive transforms directly.
   if (phase === 'duel-revealing' || phase === 'duel-over') return;
 
   me.avatar.group.position.copy(me.pos);
   me.avatar.group.rotation.y = me.rot;
+
+  const walkActive = (phase === 'overworld' || phase === 'challenge-sent' || phase === 'challenge-received');
+  if (walkActive) applyWalkAnim(me.avatar, me.walkPhase, me.isMoving, dt);
+  else applyWalkAnim(me.avatar, 0, false, dt);
+
   for (const p of peers.values()) {
+    // Infer motion from the gap between the target pose and current avatar pose.
+    const gap = p.avatar.group.position.distanceTo(p.pos);
+    p.isMoving = gap > 0.03;
+    if (p.isMoving) p.walkPhase += dt * 9;
+
     p.avatar.group.position.lerp(p.pos, 0.25);
     p.avatar.group.rotation.y = p.rot;
+
+    if (walkActive) applyWalkAnim(p.avatar, p.walkPhase, p.isMoving, dt);
+    else applyWalkAnim(p.avatar, 0, false, dt);
   }
 }
 
@@ -1002,9 +1361,11 @@ function updateCamera() {
     phase === 'duel-over'
   );
   if (isArena) {
-    // Cinematic side view of the arena
-    targetPos = ARENA_CENTER.clone().add(new THREE.Vector3(0, 5.5, 12));
-    lookAt    = ARENA_CENTER.clone().add(new THREE.Vector3(0, 1.4, 0));
+    // Cinematic side view — sit outside the near spectator stand (radius
+    // ~18.5) so the camera doesn't clip through benches, but keep a low
+    // enough angle to see the stands on the far side.
+    targetPos = ARENA_CENTER.clone().add(new THREE.Vector3(0, 6.5, 22));
+    lookAt    = ARENA_CENTER.clone().add(new THREE.Vector3(0, 2.0, 0));
   } else {
     // Mouse-look orbit: camera sits behind the player at spherical offset.
     const cp = Math.cos(camPitch);
@@ -1057,8 +1418,10 @@ function tick() {
 
   updateMovement(dt);
   updatePhase(dt);
-  updateAvatars();
+  updateAvatars(dt);
   if (phase === 'duel-revealing') animateDuelReveal();
+  updateSpectators(dt);
+  updateTomatoes(dt);
   updateCamera();
   updateNameplates();
 
