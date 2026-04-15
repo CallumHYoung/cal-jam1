@@ -1496,7 +1496,9 @@ function updateMovement(dt) {
     const speed = Math.max(3, incoming.speed || 6);
     me.pos.x += mvx * speed * dt;
     me.pos.z += mvz * speed * dt;
-    me.rot = Math.atan2(mvx, mvz) + Math.PI;
+    // Avatar's face is local +Z, so rotation.y = atan2(mvx, mvz) points
+    // the character in the direction of motion.
+    me.rot = Math.atan2(mvx, mvz);
     me.walkPhase += dt * 9;
   }
   me.pos.x = Math.max(-120, Math.min(120, me.pos.x));
