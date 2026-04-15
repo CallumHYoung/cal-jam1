@@ -29,9 +29,18 @@
   <div id="centerMsg" class="hidden"></div>
   <div id="timer" class="hidden">4</div>
   <div id="moveHints" class="hidden">
-    <div class="moveKey" data-move="1"><span class="k">1</span> Thrust</div>
-    <div class="moveKey" data-move="2"><span class="k">2</span> Parry</div>
-    <div class="moveKey" data-move="3"><span class="k">3</span> Feint</div>
+    <div class="moveKey" data-move="1">
+      <div class="top"><span class="k">1</span> Thrust</div>
+      <div class="sub"><span class="beats">beats Feint</span> · <span class="loses">loses to Parry</span></div>
+    </div>
+    <div class="moveKey" data-move="2">
+      <div class="top"><span class="k">2</span> Parry</div>
+      <div class="sub"><span class="beats">beats Thrust</span> · <span class="loses">loses to Feint</span></div>
+    </div>
+    <div class="moveKey" data-move="3">
+      <div class="top"><span class="k">3</span> Feint</div>
+      <div class="sub"><span class="beats">beats Parry</span> · <span class="loses">loses to Thrust</span></div>
+    </div>
   </div>
 </div>
 <button id="portalBtn">no portal</button>

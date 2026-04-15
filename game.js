@@ -133,8 +133,10 @@ innerRing.rotation.x = -Math.PI / 2;
 innerRing.position.y = 0.03;
 arena.add(innerRing);
 
+// Pillars offset by half a step so none sits directly between the arena
+// cinematic camera (+Z) and the duellists in the middle.
 for (let i = 0; i < 8; i++) {
-  const a = (i / 8) * Math.PI * 2;
+  const a = ((i + 0.5) / 8) * Math.PI * 2;
   const pillar = new THREE.Mesh(
     new THREE.BoxGeometry(0.6, 6, 0.6),
     new THREE.MeshStandardMaterial({ color: 0x3a224a, emissive: 0x1a0a2a, metalness: 0.6, roughness: 0.4 })
@@ -280,21 +282,57 @@ me.avatar.group.position.copy(me.pos);
 me.avatar.group.rotation.y = me.rot;
 scene.add(me.avatar.group);
 
-const opponent = {
-  username:  'opponent',
-  colorHex:  '#888888',
-  pos:       new THREE.Vector3(6, 0, 5),
-  rot:       Math.PI,
-  avatar:    makeAvatar('#888888'),
-  hasCrown:  false,
-  duelScore: 0,
-  duelMove:  null,
-  connected: false,
-};
-opponent.avatar.group.position.copy(opponent.pos);
-opponent.avatar.group.rotation.y = opponent.rot;
-opponent.avatar.group.visible = false;
-scene.add(opponent.avatar.group);
+// Remote peers (any number). The map is keyed by Trystero peerId.
+// Each entry holds the avatar, nameplate DOM node, network-synced pose,
+// plus per-duel fields that are only meaningful while this peer is our
+// active duel partner.
+const peers = new Map();
+
+function makePeerState(id) {
+  const avatar = makeAvatar('#888888');
+  scene.add(avatar.group);
+  avatar.group.position.set(8, 0, 5);
+
+  const nameplate = document.createElement('div');
+  nameplate.className = 'nameplate';
+  nameplate.textContent = 'opponent';
+  nameplate.style.color = '#ff4fd8';
+  overlay.appendChild(nameplate);
+
+  return {
+    id,
+    username:  'opponent',
+    colorHex:  '#888888',
+    pos:       new THREE.Vector3(8, 0, 5),
+    rot:       0,
+    avatar,
+    nameplate,
+    hasCrown:  false,
+    duelScore: 0,
+    duelMove:  null,
+  };
+}
+
+function getPeer(id) {
+  let p = peers.get(id);
+  if (!p) {
+    p = makePeerState(id);
+    peers.set(id, p);
+  }
+  return p;
+}
+
+function removePeer(id) {
+  const p = peers.get(id);
+  if (!p) return;
+  scene.remove(p.avatar.group);
+  p.nameplate.remove();
+  peers.delete(id);
+}
+
+function duelPartner() {
+  return duelPartnerId ? peers.get(duelPartnerId) || null : null;
+}
 
 // Phase FSM
 //   overworld | challenge-sent | challenge-received | entering-arena
@@ -308,14 +346,16 @@ let revealDeadline = 0;
 let lastResult = null;    // 'me' | 'opp' | 'tie'
 let lastMoves  = null;    // { me, opp }
 let duelWinner = null;    // 'me' | 'opp'
+let duelPartnerId = null; // peerId of the current duel opponent
 let iAmHost = false;      // lower peer id drives rounds
 
 // Rock-paper-scissors: Thrust beats Feint, Feint beats Parry, Parry beats Thrust
-const MOVE_NAME = { 1: 'Thrust', 2: 'Parry', 3: 'Feint' };
+const MOVE_NAME     = { 1: 'Thrust', 2: 'Parry', 3: 'Feint' };
+const MOVE_BEATS    = { 1: 3,        2: 1,       3: 2       };
+const MOVE_LOSES_TO = { 1: 2,        2: 3,       3: 1       };
 function moveResult(a, b) {
   if (a === b) return 0;
-  if ((a === 1 && b === 3) || (a === 3 && b === 2) || (a === 2 && b === 1)) return 1;
-  return -1;
+  return MOVE_BEATS[a] === b ? 1 : -1;
 }
 
 // ====================================================================
@@ -337,7 +377,7 @@ function flashCenterMsg(text, ms = 1600) {
 
 function updateScoreUI() {
   scoreMeEl.textContent = me.duelScore;
-  scoreOppEl.textContent = opponent.duelScore;
+  scoreOppEl.textContent = duelPartner()?.duelScore ?? 0;
 }
 function showScore(v)     { scorePanel.classList.toggle('hidden', !v); }
 function showMoveHints(v) {
@@ -370,7 +410,6 @@ const HINTS = {
 
 let room = null;
 let myPeerId = null;
-let opponentId = null;
 let sendState = null;
 let sendChallenge = null;
 let sendMove = null;
@@ -424,50 +463,41 @@ async function setupMultiplayer() {
 
     const [s, gs] = room.makeAction('state');
     sendState = s;
-    gs((data, peerId) => {
-      if (!opponentId) opponentId = peerId;
-      if (peerId !== opponentId) return;
-      applyOpponentState(data);
-    });
+    gs((data, peerId) => applyPeerState(getPeer(peerId), data));
 
     const [c, gc] = room.makeAction('chal');
     sendChallenge = c;
-    gc((data, peerId) => {
-      if (peerId !== opponentId) return;
-      handleChallenge(data);
-    });
+    gc((data, peerId) => handleChallenge(data, peerId));
 
     const [m, gm] = room.makeAction('move');
     sendMove = m;
     gm((data, peerId) => {
-      if (peerId !== opponentId) return;
+      if (peerId !== duelPartnerId) return;
       handleOpponentMove(data);
     });
 
     const [r, gr] = room.makeAction('round');
     sendRound = r;
     gr((data, peerId) => {
-      if (peerId !== opponentId) return;
+      if (peerId !== duelPartnerId) return;
       handleRoundSync(data);
     });
 
     room.onPeerJoin(id => {
-      if (opponentId && opponentId !== id) return;
-      opponentId = id;
-      iAmHost = myPeerId < id;
-      opponent.connected = true;
-      opponent.avatar.group.visible = true;
-      setStatus('opponent connected');
+      getPeer(id);
+      setStatus(`${peers.size} opponent${peers.size === 1 ? '' : 's'} connected`);
       broadcastSelf();
     });
 
     room.onPeerLeave(id => {
-      if (id !== opponentId) return;
-      opponentId = null;
-      opponent.connected = false;
-      opponent.avatar.group.visible = false;
-      setStatus('opponent left', true);
-      if (phase !== 'overworld') returnToOverworld();
+      removePeer(id);
+      if (id === duelPartnerId) {
+        duelPartnerId = null;
+        if (phase !== 'overworld') returnToOverworld();
+      }
+      setStatus(peers.size
+        ? `${peers.size} opponent${peers.size === 1 ? '' : 's'} connected`
+        : 'waiting for opponent…', peers.size === 0);
     });
 
     setStatus('waiting for opponent…');
@@ -483,79 +513,95 @@ addEventListener('beforeunload', () => {
   if (room) { try { room.leave(); } catch {} }
 });
 
-function applyOpponentState(data) {
-  opponent.username = data.username || 'opponent';
-  if (data.colorHex && data.colorHex !== opponent.colorHex) {
-    opponent.colorHex = data.colorHex;
-    opponent.avatar.body.material.color.set(data.colorHex);
+function applyPeerState(peer, data) {
+  peer.username = data.username || 'opponent';
+  if (data.colorHex && data.colorHex !== peer.colorHex) {
+    peer.colorHex = data.colorHex;
+    peer.avatar.body.material.color.set(data.colorHex);
   }
-  opponent.hasCrown = !!data.hasCrown;
-  opponent.avatar.crown.visible = opponent.hasCrown;
+  peer.hasCrown = !!data.hasCrown;
+  peer.avatar.crown.visible = peer.hasCrown;
 
-  // During duels, opponent position is fixed locally — ignore network drift.
-  const inDuel = (
+  // During a duel, our partner's position is fixed locally — ignore drift.
+  const isActiveDuelPartner = peer.id === duelPartnerId && (
     phase === 'duel-picking' || phase === 'duel-revealing' ||
     phase === 'duel-settle'  || phase === 'duel-over'
   );
-  if (inDuel) return;
+  if (isActiveDuelPartner) return;
   if (typeof data.px === 'number') {
-    opponent.pos.set(data.px, data.py || 0, data.pz || 0);
+    peer.pos.set(data.px, data.py || 0, data.pz || 0);
   }
-  if (typeof data.rot === 'number') opponent.rot = data.rot;
+  if (typeof data.rot === 'number') peer.rot = data.rot;
 }
 
 // ====================================================================
 // Challenge logic
 // ====================================================================
 
-function distToOpponent() {
-  return me.pos.distanceTo(opponent.pos);
+function findNearestPeerInRange(maxDist) {
+  let best = null, bestDist = maxDist;
+  for (const p of peers.values()) {
+    const d = me.pos.distanceTo(p.pos);
+    if (d < bestDist) { best = p; bestDist = d; }
+  }
+  return best;
 }
 
 function tryChallenge() {
-  if (phase !== 'overworld' || !opponent.connected || !sendChallenge) return;
-  if (distToOpponent() > 5.5) {
+  if (phase !== 'overworld' || !sendChallenge) return;
+  if (peers.size === 0) {
+    flashCenterMsg('No opponents connected');
+    return;
+  }
+  const target = findNearestPeerInRange(5.5);
+  if (!target) {
     flashCenterMsg('Get closer to challenge them');
     return;
   }
+  duelPartnerId = target.id;
   phase = 'challenge-sent';
   challengeExpiresAt = performance.now() + 12000;
-  showCenterMsg(`Challenge sent to ${opponent.username}…`);
-  sendChallenge({ action: 'request' });
+  showCenterMsg(`Challenge sent to ${target.username}…`);
+  sendChallenge({ action: 'request' }, target.id);
   broadcastSelf();
 }
 
 function acceptChallenge() {
-  if (phase !== 'challenge-received' || !sendChallenge) return;
-  sendChallenge({ action: 'accept' });
+  if (phase !== 'challenge-received' || !sendChallenge || !duelPartnerId) return;
+  sendChallenge({ action: 'accept' }, duelPartnerId);
   beginDuel();
 }
 
 function declineChallenge() {
-  if (phase !== 'challenge-received' || !sendChallenge) return;
-  sendChallenge({ action: 'decline' });
+  if (phase !== 'challenge-received' || !sendChallenge || !duelPartnerId) return;
+  sendChallenge({ action: 'decline' }, duelPartnerId);
+  duelPartnerId = null;
   phase = 'overworld';
   hideCenterMsg();
   broadcastSelf();
 }
 
-function handleChallenge(data) {
+function handleChallenge(data, peerId) {
+  const sender = peers.get(peerId);
+  if (!sender) return;
   if (data.action === 'request') {
     if (phase !== 'overworld') {
-      if (sendChallenge) sendChallenge({ action: 'decline' });
+      if (sendChallenge) sendChallenge({ action: 'decline' }, peerId);
       return;
     }
+    duelPartnerId = peerId;
     phase = 'challenge-received';
     challengeExpiresAt = performance.now() + 12000;
-    showCenterMsg(`${opponent.username || 'opponent'} challenges you to a duel!\nY to accept · N to decline`);
+    showCenterMsg(`${sender.username || 'opponent'} challenges you to a duel!\nY to accept · N to decline`);
     broadcastSelf();
   } else if (data.action === 'accept') {
-    if (phase !== 'challenge-sent') return;
+    if (phase !== 'challenge-sent' || peerId !== duelPartnerId) return;
     beginDuel();
   } else if (data.action === 'decline') {
-    if (phase !== 'challenge-sent') return;
+    if (phase !== 'challenge-sent' || peerId !== duelPartnerId) return;
     phase = 'overworld';
-    flashCenterMsg(`${opponent.username || 'opponent'} declined`);
+    duelPartnerId = null;
+    flashCenterMsg(`${sender.username || 'opponent'} declined`);
     broadcastSelf();
   }
 }
@@ -565,39 +611,43 @@ function handleChallenge(data) {
 // ====================================================================
 
 function beginDuel() {
+  const partner = duelPartner();
+  if (!partner) return;
+  // Lower peer id drives rounds between us.
+  iAmHost = myPeerId < partner.id;
   // Release the mouse so the arena cinematic cam isn't fighting pointer-lock input.
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   phase = 'entering-arena';
   phaseTimer = performance.now() + 2000;
   me.duelScore = 0;
-  opponent.duelScore = 0;
+  partner.duelScore = 0;
   roundIndex = 0;
   lastResult = null;
   lastMoves = null;
   duelWinner = null;
   me.duelMove = null;
-  opponent.duelMove = null;
+  partner.duelMove = null;
 
   // Host on the west side, non-host on the east.
   const mySide  = iAmHost ? -1 : 1;
   const oppSide = -mySide;
   me.pos.set(ARENA_CENTER.x + mySide * 3.2, 0, ARENA_CENTER.z);
   me.rot = mySide < 0 ? Math.PI / 2 : -Math.PI / 2; // face the center
-  opponent.pos.set(ARENA_CENTER.x + oppSide * 3.2, 0, ARENA_CENTER.z);
-  opponent.rot = oppSide < 0 ? Math.PI / 2 : -Math.PI / 2;
+  partner.pos.set(ARENA_CENTER.x + oppSide * 3.2, 0, ARENA_CENTER.z);
+  partner.rot = oppSide < 0 ? Math.PI / 2 : -Math.PI / 2;
 
   // Snap avatars so we don't see a lerp from the overworld.
   me.avatar.group.position.copy(me.pos);
   me.avatar.group.rotation.y = me.rot;
-  opponent.avatar.group.position.copy(opponent.pos);
-  opponent.avatar.group.rotation.y = opponent.rot;
+  partner.avatar.group.position.copy(partner.pos);
+  partner.avatar.group.rotation.y = partner.rot;
   resetDuelPose(me.avatar);
-  resetDuelPose(opponent.avatar);
+  resetDuelPose(partner.avatar);
 
   me.avatar.armor.visible = true;
   me.avatar.sword.visible = true;
-  opponent.avatar.armor.visible = true;
-  opponent.avatar.sword.visible = true;
+  partner.avatar.armor.visible = true;
+  partner.avatar.sword.visible = true;
 
   updateScoreUI();
   showScore(true);
@@ -606,9 +656,9 @@ function beginDuel() {
 }
 
 function hostAdvanceRound() {
-  if (!iAmHost || !sendRound) return;
+  if (!iAmHost || !sendRound || !duelPartnerId) return;
   const next = roundIndex + 1;
-  sendRound({ action: 'start', roundIndex: next });
+  sendRound({ action: 'start', roundIndex: next }, duelPartnerId);
   startRound(next);
 }
 
@@ -619,13 +669,15 @@ function handleRoundSync(data) {
 }
 
 function startRound(idx) {
+  const partner = duelPartner();
+  if (!partner) return;
   roundIndex = idx;
   phase = 'duel-picking';
   me.duelMove = null;
-  opponent.duelMove = null;
+  partner.duelMove = null;
   pickDeadline = performance.now() + 4000;
   resetDuelPose(me.avatar);
-  resetDuelPose(opponent.avatar);
+  resetDuelPose(partner.avatar);
   showCenterMsg(`Round ${roundIndex} — lock in your move!`);
   showMoveHints(true);
   showTimer(true);
@@ -636,30 +688,39 @@ function pickMove(n) {
   if (me.duelMove != null) return;
   me.duelMove = n;
   lockMoveHint(n);
-  if (sendMove) sendMove({ roundIndex, move: n });
+  const beats  = MOVE_NAME[MOVE_BEATS[n]];
+  const losesTo = MOVE_NAME[MOVE_LOSES_TO[n]];
+  showCenterMsg(`You picked ${MOVE_NAME[n]} — beats ${beats}, loses to ${losesTo}\nWaiting for opponent…`);
+  if (sendMove && duelPartnerId) sendMove({ roundIndex, move: n }, duelPartnerId);
   checkBothMovesReady();
 }
 
 function handleOpponentMove(data) {
+  const partner = duelPartner();
+  if (!partner) return;
   if (data.roundIndex !== roundIndex) return;
-  if (opponent.duelMove != null) return;
-  opponent.duelMove = data.move;
+  if (partner.duelMove != null) return;
+  partner.duelMove = data.move;
   checkBothMovesReady();
 }
 
 function checkBothMovesReady() {
   if (phase !== 'duel-picking') return;
-  if (me.duelMove != null && opponent.duelMove != null) revealRound();
+  const partner = duelPartner();
+  if (!partner) return;
+  if (me.duelMove != null && partner.duelMove != null) revealRound();
 }
 
 function revealRound() {
+  const partner = duelPartner();
+  if (!partner) return;
   phase = 'duel-revealing';
   revealDeadline = performance.now() + 2000;
   showMoveHints(false);
   showTimer(false);
 
   const mv = me.duelMove || 1;
-  const ov = opponent.duelMove || 1;
+  const ov = partner.duelMove || 1;
   const r = moveResult(mv, ov);
   lastMoves = { me: mv, opp: ov };
 
@@ -668,7 +729,7 @@ function revealRound() {
     lastResult = 'me';
     showCenterMsg(`${MOVE_NAME[mv]} beats ${MOVE_NAME[ov]} — TOUCHÉ!`);
   } else if (r === -1) {
-    opponent.duelScore++;
+    partner.duelScore++;
     lastResult = 'opp';
     showCenterMsg(`${MOVE_NAME[ov]} beats ${MOVE_NAME[mv]} — you're hit!`);
   } else {
@@ -679,9 +740,10 @@ function revealRound() {
 }
 
 function afterReveal() {
+  const partner = duelPartner();
   resetDuelPose(me.avatar);
-  resetDuelPose(opponent.avatar);
-  if (me.duelScore >= 3 || opponent.duelScore >= 3) {
+  if (partner) resetDuelPose(partner.avatar);
+  if (me.duelScore >= 3 || (partner && partner.duelScore >= 3)) {
     endDuel();
     return;
   }
@@ -690,14 +752,15 @@ function afterReveal() {
 }
 
 function endDuel() {
+  const partner = duelPartner();
   phase = 'duel-over';
   phaseTimer = performance.now() + 5500;
   duelWinner = me.duelScore >= 3 ? 'me' : 'opp';
 
   if (duelWinner === 'me') {
-    if (opponent.hasCrown) {
-      opponent.hasCrown = false;
-      opponent.avatar.crown.visible = false;
+    if (partner && partner.hasCrown) {
+      partner.hasCrown = false;
+      partner.avatar.crown.visible = false;
     }
     me.hasCrown = true;
     me.avatar.crown.visible = true;
@@ -715,23 +778,28 @@ function endDuel() {
 }
 
 function returnToOverworld() {
+  const partner = duelPartner();
   phase = 'overworld';
   phaseTimer = 0;
   roundIndex = 0;
   me.duelMove = null;
-  opponent.duelMove = null;
   me.duelScore = 0;
-  opponent.duelScore = 0;
   lastResult = null;
   lastMoves = null;
   duelWinner = null;
 
   me.avatar.armor.visible = false;
   me.avatar.sword.visible = false;
-  opponent.avatar.armor.visible = false;
-  opponent.avatar.sword.visible = false;
   resetDuelPose(me.avatar);
-  resetDuelPose(opponent.avatar);
+  if (partner) {
+    partner.duelMove = null;
+    partner.duelScore = 0;
+    partner.avatar.armor.visible = false;
+    partner.avatar.sword.visible = false;
+    resetDuelPose(partner.avatar);
+  }
+
+  duelPartnerId = null;
 
   me.pos.set(0, 0, 5);
   me.rot = Math.PI;
@@ -825,6 +893,8 @@ function applyMoveAnim(av, move, t, won, lost) {
 }
 
 function animateDuelReveal() {
+  const partner = duelPartner();
+  if (!partner) return;
   const now = performance.now();
   const total = 2000;
   const elapsed = total - Math.max(0, revealDeadline - now);
@@ -832,8 +902,8 @@ function animateDuelReveal() {
   const curve = Math.sin(t * Math.PI); // 0 -> 1 -> 0
   const mv = lastMoves?.me ?? 1;
   const ov = lastMoves?.opp ?? 1;
-  applyMoveAnim(me.avatar,        mv, curve, lastResult === 'me',  lastResult === 'opp');
-  applyMoveAnim(opponent.avatar,  ov, curve, lastResult === 'opp', lastResult === 'me');
+  applyMoveAnim(me.avatar,      mv, curve, lastResult === 'me',  lastResult === 'opp');
+  applyMoveAnim(partner.avatar, ov, curve, lastResult === 'opp', lastResult === 'me');
 }
 
 function updateMovement(dt) {
@@ -878,14 +948,15 @@ function updatePhase(dt) {
       }
     }
   } else if (phase === 'duel-picking') {
+    const partner = duelPartner();
     const remain = Math.max(0, pickDeadline - now);
     timerEl.textContent = Math.ceil(remain / 1000);
     if (remain <= 0 && me.duelMove == null) {
       pickMove(1); // auto-thrust on timeout
     }
     // Grace period for a missing opponent move, then force-resolve.
-    if (remain <= 0 && opponent.duelMove == null && now - pickDeadline > 1500) {
-      opponent.duelMove = 1;
+    if (partner && remain <= 0 && partner.duelMove == null && now - pickDeadline > 1500) {
+      partner.duelMove = 1;
       revealRound();
     }
   } else if (phase === 'duel-revealing') {
@@ -895,15 +966,15 @@ function updatePhase(dt) {
       if (iAmHost) hostAdvanceRound();
     }
   } else if (phase === 'duel-over') {
+    const partner = duelPartner();
     if (duelWinner === 'me') {
       me.avatar.group.rotation.y += dt * 3;
       me.avatar.group.position.y = Math.abs(Math.sin(now * 0.007)) * 0.7;
-      // Sparkle the crown
       me.avatar.crown.rotation.y += dt * 4;
-    } else if (duelWinner === 'opp') {
-      opponent.avatar.group.rotation.y += dt * 3;
-      opponent.avatar.group.position.y = Math.abs(Math.sin(now * 0.007)) * 0.7;
-      opponent.avatar.crown.rotation.y += dt * 4;
+    } else if (duelWinner === 'opp' && partner) {
+      partner.avatar.group.rotation.y += dt * 3;
+      partner.avatar.group.position.y = Math.abs(Math.sin(now * 0.007)) * 0.7;
+      partner.avatar.crown.rotation.y += dt * 4;
     }
     if (now >= phaseTimer) returnToOverworld();
   }
@@ -917,8 +988,10 @@ function updateAvatars() {
 
   me.avatar.group.position.copy(me.pos);
   me.avatar.group.rotation.y = me.rot;
-  opponent.avatar.group.position.lerp(opponent.pos, 0.25);
-  opponent.avatar.group.rotation.y = opponent.rot;
+  for (const p of peers.values()) {
+    p.avatar.group.position.lerp(p.pos, 0.25);
+    p.avatar.group.rotation.y = p.rot;
+  }
 }
 
 function updateCamera() {
@@ -953,12 +1026,6 @@ myLabel.className = 'nameplate';
 myLabel.textContent = me.username;
 overlay.appendChild(myLabel);
 
-const oppLabel = document.createElement('div');
-oppLabel.className = 'nameplate';
-oppLabel.textContent = 'opponent';
-oppLabel.style.color = '#ff4fd8';
-overlay.appendChild(oppLabel);
-
 const _proj = new THREE.Vector3();
 function projectLabel(el, worldPos) {
   _proj.copy(worldPos);
@@ -972,11 +1039,9 @@ function projectLabel(el, worldPos) {
 function updateNameplates() {
   myLabel.textContent = me.username;
   projectLabel(myLabel, me.avatar.group.position);
-  if (opponent.connected) {
-    oppLabel.textContent = opponent.username || 'opponent';
-    projectLabel(oppLabel, opponent.avatar.group.position);
-  } else {
-    oppLabel.style.display = 'none';
+  for (const p of peers.values()) {
+    p.nameplate.textContent = p.username || 'opponent';
+    projectLabel(p.nameplate, p.avatar.group.position);
   }
 }
 

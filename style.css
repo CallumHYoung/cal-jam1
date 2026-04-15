@@ -119,11 +119,34 @@ html, body {
   background: rgba(10, 5, 20, 0.85);
   border: 2px solid var(--accent);
   border-radius: 10px;
-  padding: 0.7rem 1.25rem;
-  font-size: 1.05rem;
-  font-weight: bold;
+  padding: 0.6rem 1.1rem 0.65rem;
+  text-align: center;
   text-shadow: 0 0 8px var(--accent);
   transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  min-width: 10rem;
+}
+
+.moveKey .top {
+  font-size: 1.05rem;
+  font-weight: bold;
+}
+
+.moveKey .sub {
+  font-size: 0.72rem;
+  margin-top: 0.35rem;
+  opacity: 0.9;
+  text-shadow: none;
+  letter-spacing: 0.01em;
+}
+
+.moveKey .sub .beats {
+  color: #7dff9c;
+  text-shadow: 0 0 6px rgba(125, 255, 156, 0.6);
+}
+
+.moveKey .sub .loses {
+  color: #ff8888;
+  text-shadow: 0 0 6px rgba(255, 136, 136, 0.6);
 }
 
 .moveKey.locked {
