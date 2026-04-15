@@ -174,8 +174,10 @@ const STAND_H     = 1.2;
     standGeo,
     new THREE.MeshStandardMaterial({ color: 0x2a1836, roughness: 0.9 })
   );
+  // After rotating the extrusion flat, the prism spans Y=[0, STAND_H]:
+  // leave it at the origin so the bottom rests on the ground and the
+  // spectator walking surface is exactly at y = STAND_H.
   standMesh.rotation.x = -Math.PI / 2;
-  standMesh.position.y = STAND_H;
   standMesh.receiveShadow = true;
   arena.add(standMesh);
 
@@ -241,11 +243,57 @@ for (let i = 0; i < SPECTATOR_COUNT; i++) {
 }
 
 function isArenaPhase() {
+  return isDuelPhaseName(phase);
+}
+
+function isDuelPhaseName(name) {
   return (
-    phase === 'entering-arena' || phase === 'duel-picking' ||
-    phase === 'duel-revealing' || phase === 'duel-settle' ||
-    phase === 'duel-over'
+    name === 'entering-arena' || name === 'duel-picking' ||
+    name === 'duel-revealing' || name === 'duel-settle' ||
+    name === 'duel-over'
   );
+}
+
+// Is any duel in progress (mine or a peer's)? If so, everybody not in it
+// belongs in the stands from every client's perspective.
+let anyDuelActive = false;
+// Am I personally watching from the stands (duel active + I'm not in it)?
+let isSpectating = false;
+
+function updateSpectating() {
+  const myInDuel = isDuelPhaseName(phase);
+  anyDuelActive = myInDuel;
+  if (!myInDuel) {
+    for (const p of peers.values()) {
+      if (isDuelPhaseName(p.phase)) { anyDuelActive = true; break; }
+    }
+  }
+  isSpectating = anyDuelActive && !myInDuel;
+}
+
+// Deterministic seat in the stands for a given player id. Using a stable
+// hash means every client places each player in the same seat so the
+// spectators all agree on where everyone is sitting.
+function hashString(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+const SEAT_RADIUS = (STAND_INNER + STAND_OUTER) / 2;
+function seatPosForId(id) {
+  const angle = (hashString(id) % 10000) / 10000 * Math.PI * 2;
+  return new THREE.Vector3(
+    ARENA_CENTER.x + Math.cos(angle) * SEAT_RADIUS,
+    STAND_H,
+    ARENA_CENTER.z + Math.sin(angle) * SEAT_RADIUS,
+  );
+}
+function seatFacingYawForId(id) {
+  const seat = seatPosForId(id);
+  return Math.atan2(ARENA_CENTER.x - seat.x, ARENA_CENTER.z - seat.z);
 }
 
 function updateSpectators(dt) {
@@ -267,39 +315,19 @@ const TOMATO_GRAVITY = 22;
 const tomatoes = [];
 let nextTomatoAt = 0;
 
-function spawnTomato() {
-  if (spectators.length === 0) return;
-  const partner = duelPartner();
-  // Pick a random spectator and a random target (me or the partner in the arena).
-  const s = spectators[Math.floor(Math.random() * spectators.length)];
-  const fromWorld = new THREE.Vector3();
-  s.group.getWorldPosition(fromWorld);
-  fromWorld.y += 1.1;
+const TOMATO_STEM_GEO = new THREE.ConeGeometry(0.05, 0.1, 6);
+const TOMATO_STEM_MAT = new THREE.MeshStandardMaterial({ color: 0x3a8a3a });
 
-  const targets = [];
-  if (isArenaPhase()) {
-    targets.push(me.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
-    if (partner) targets.push(partner.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
-  }
-  if (targets.length === 0) return;
-  const target = targets[Math.floor(Math.random() * targets.length)];
-  // Spray miss so they don't all splat the same spot.
-  target.x += (Math.random() - 0.5) * 2.2;
-  target.z += (Math.random() - 0.5) * 2.2;
-
-  const flightTime = 1.15 + Math.random() * 0.35;
-  const vx = (target.x - fromWorld.x) / flightTime;
-  const vz = (target.z - fromWorld.z) / flightTime;
-  const vy = (target.y - fromWorld.y + 0.5 * TOMATO_GRAVITY * flightTime * flightTime) / flightTime;
+function spawnTomatoFromTo(from, target, flightTimeHint) {
+  const flightTime = flightTimeHint || (1.15 + Math.random() * 0.35);
+  const vx = (target.x - from.x) / flightTime;
+  const vz = (target.z - from.z) / flightTime;
+  const vy = (target.y - from.y + 0.5 * TOMATO_GRAVITY * flightTime * flightTime) / flightTime;
 
   const mesh = new THREE.Mesh(TOMATO_GEO, TOMATO_MAT);
-  mesh.position.copy(fromWorld);
+  mesh.position.copy(from);
   mesh.castShadow = true;
-  // Little green stem nub
-  const stem = new THREE.Mesh(
-    new THREE.ConeGeometry(0.05, 0.1, 6),
-    new THREE.MeshStandardMaterial({ color: 0x3a8a3a })
-  );
+  const stem = new THREE.Mesh(TOMATO_STEM_GEO, TOMATO_STEM_MAT);
   stem.position.y = 0.18;
   mesh.add(stem);
   scene.add(mesh);
@@ -316,10 +344,63 @@ function spawnTomato() {
   });
 }
 
+function pickDuelTargets() {
+  // World positions of every avatar currently in the arena (me plus any
+  // peer whose phase is a duel phase). Used as targets for thrown tomatoes.
+  const targets = [];
+  if (isArenaPhase()) {
+    targets.push(me.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+  }
+  for (const p of peers.values()) {
+    if (isDuelPhaseName(p.phase)) {
+      targets.push(p.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+    }
+  }
+  return targets;
+}
+
+function spawnNpcTomato() {
+  if (spectators.length === 0) return;
+  const targets = pickDuelTargets();
+  if (targets.length === 0) return;
+  const s = spectators[Math.floor(Math.random() * spectators.length)];
+  const fromWorld = new THREE.Vector3();
+  s.group.getWorldPosition(fromWorld);
+  fromWorld.y += 1.1;
+  const target = targets[Math.floor(Math.random() * targets.length)];
+  target.x += (Math.random() - 0.5) * 2.2;
+  target.z += (Math.random() - 0.5) * 2.2;
+  spawnTomatoFromTo(fromWorld, target);
+}
+
+function throwSpectatorTomato() {
+  if (!isSpectating) return;
+  const targets = [];
+  for (const p of peers.values()) {
+    if (isDuelPhaseName(p.phase)) {
+      targets.push(p.avatar.group.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+    }
+  }
+  if (targets.length === 0) return;
+  const target = targets[Math.floor(Math.random() * targets.length)];
+  target.x += (Math.random() - 0.5) * 1.8;
+  target.z += (Math.random() - 0.5) * 1.8;
+  const from = me.avatar.group.position.clone().add(new THREE.Vector3(0, 1.6, 0));
+  spawnTomatoFromTo(from, target);
+  if (sendTomato) {
+    sendTomato({
+      fx: from.x,   fy: from.y,   fz: from.z,
+      tx: target.x, ty: target.y, tz: target.z,
+    });
+  }
+}
+
 function updateTomatoes(dt) {
   const now = performance.now();
-  if (isArenaPhase() && now >= nextTomatoAt) {
-    spawnTomato();
+  // NPC crowd chucks tomatoes whenever there's a duel we can see.
+  const duelOnAnywhere = isArenaPhase() || isSpectating;
+  if (duelOnAnywhere && now >= nextTomatoAt) {
+    spawnNpcTomato();
     nextTomatoAt = now + 450 + Math.random() * 700;
   }
   for (let i = tomatoes.length - 1; i >= 0; i--) {
@@ -630,6 +711,7 @@ function makePeerState(id) {
     duelMove:  null,
     walkPhase: 0,
     isMoving:  false,
+    phase:     'overworld',
   };
 }
 
@@ -734,6 +816,7 @@ let sendState = null;
 let sendChallenge = null;
 let sendMove = null;
 let sendRound = null;
+let sendTomato = null;
 
 function setStatus(text, isError = false) {
   peersEl.textContent = text;
@@ -803,6 +886,15 @@ async function setupMultiplayer() {
       handleRoundSync(data);
     });
 
+    const [tm, gtm] = room.makeAction('tom');
+    sendTomato = tm;
+    gtm((data) => {
+      spawnTomatoFromTo(
+        new THREE.Vector3(data.fx, data.fy, data.fz),
+        new THREE.Vector3(data.tx, data.ty, data.tz),
+      );
+    });
+
     room.onPeerJoin(id => {
       getPeer(id);
       setStatus(`${peers.size} opponent${peers.size === 1 ? '' : 's'} connected`);
@@ -841,6 +933,7 @@ function applyPeerState(peer, data) {
   }
   peer.hasCrown = !!data.hasCrown;
   peer.avatar.crown.visible = peer.hasCrown;
+  if (typeof data.phase === 'string') peer.phase = data.phase;
 
   // During a duel, our partner's position is fixed locally — ignore drift.
   const isActiveDuelPartner = peer.id === duelPartnerId && (
@@ -1144,6 +1237,7 @@ addEventListener('keydown', e => {
   if (k === 'f') tryChallenge();
   else if (k === 'y') acceptChallenge();
   else if (k === 'n') declineChallenge();
+  else if (k === 't') throwSpectatorTomato();
   else if (k === '1') pickMove(1);
   else if (k === '2') pickMove(2);
   else if (k === '3') pickMove(3);
@@ -1325,41 +1419,57 @@ function updatePhase(dt) {
     if (now >= phaseTimer) returnToOverworld();
   }
 
-  hintEl.textContent = HINTS[phase] || '';
+  hintEl.textContent = isSpectating
+    ? 'Watching the duel — T to throw a rotten tomato'
+    : (HINTS[phase] || '');
 }
 
 function updateAvatars(dt) {
   // During the reveal animation and victory dance we drive transforms directly.
   if (phase === 'duel-revealing' || phase === 'duel-over') return;
 
-  me.avatar.group.position.copy(me.pos);
-  me.avatar.group.rotation.y = me.rot;
+  // Me — either on my seat in the stands, or at my normal overworld pos.
+  if (isSpectating) {
+    const seat = seatPosForId(myPeerId || me.username || 'me');
+    me.avatar.group.position.copy(seat);
+    me.avatar.group.rotation.y = seatFacingYawForId(myPeerId || me.username || 'me');
+    applyWalkAnim(me.avatar, 0, false, dt);
+  } else {
+    me.avatar.group.position.copy(me.pos);
+    me.avatar.group.rotation.y = me.rot;
+    const walkActive = (phase === 'overworld' || phase === 'challenge-sent' || phase === 'challenge-received');
+    applyWalkAnim(me.avatar, me.walkPhase, walkActive && me.isMoving, dt);
+  }
 
-  const walkActive = (phase === 'overworld' || phase === 'challenge-sent' || phase === 'challenge-received');
-  if (walkActive) applyWalkAnim(me.avatar, me.walkPhase, me.isMoving, dt);
-  else applyWalkAnim(me.avatar, 0, false, dt);
-
+  // Peers — duellists stay at their broadcast (arena) pose; everyone else
+  // either walks around the overworld or sits in their assigned seat.
   for (const p of peers.values()) {
-    // Infer motion from the gap between the target pose and current avatar pose.
-    const gap = p.avatar.group.position.distanceTo(p.pos);
-    p.isMoving = gap > 0.03;
-    if (p.isMoving) p.walkPhase += dt * 9;
-
-    p.avatar.group.position.lerp(p.pos, 0.25);
-    p.avatar.group.rotation.y = p.rot;
-
-    if (walkActive) applyWalkAnim(p.avatar, p.walkPhase, p.isMoving, dt);
-    else applyWalkAnim(p.avatar, 0, false, dt);
+    const peerInDuel = isDuelPhaseName(p.phase);
+    if (peerInDuel) {
+      p.avatar.group.position.lerp(p.pos, 0.3);
+      p.avatar.group.rotation.y = p.rot;
+      p.isMoving = false;
+      applyWalkAnim(p.avatar, 0, false, dt);
+    } else if (anyDuelActive) {
+      const seat = seatPosForId(p.id);
+      p.avatar.group.position.copy(seat);
+      p.avatar.group.rotation.y = seatFacingYawForId(p.id);
+      p.isMoving = false;
+      applyWalkAnim(p.avatar, 0, false, dt);
+    } else {
+      const gap = p.avatar.group.position.distanceTo(p.pos);
+      p.isMoving = gap > 0.03;
+      if (p.isMoving) p.walkPhase += dt * 9;
+      p.avatar.group.position.lerp(p.pos, 0.25);
+      p.avatar.group.rotation.y = p.rot;
+      applyWalkAnim(p.avatar, p.walkPhase, p.isMoving, dt);
+    }
   }
 }
 
 function updateCamera() {
   let targetPos, lookAt;
-  const isArena = (
-    phase === 'entering-arena' || phase === 'duel-picking' ||
-    phase === 'duel-revealing' || phase === 'duel-settle' ||
-    phase === 'duel-over'
-  );
+  const isArena = isArenaPhase() || isSpectating;
   if (isArena) {
     // Cinematic side view — sit outside the near spectator stand (radius
     // ~18.5) so the camera doesn't clip through benches, but keep a low
@@ -1416,6 +1526,7 @@ let lastBroadcast = 0;
 function tick() {
   const dt = Math.min(0.05, clock.getDelta());
 
+  updateSpectating();
   updateMovement(dt);
   updatePhase(dt);
   updateAvatars(dt);
