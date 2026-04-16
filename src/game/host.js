@@ -179,7 +179,15 @@ export class HostRuntime {
     }
 
     if (phase === PHASE.ROUND_LIVE) {
-      // lock buy, no state changes
+      // Defensive: re-assert alive state for every team member on round start.
+      // Belt-and-braces in case _enter(BUY) was skipped for any player
+      // (e.g., they joined during agent-select and the host never saw them yet).
+      for (const p of Object.values(this.state.players)) {
+        if (p.spectator || !p.team) continue;
+        if (p.hp <= 0) { p.hp = 100; }
+        p.alive = true;
+      }
+      this._liveStartedAt = now;
     }
 
     if (phase === PHASE.ROUND_END) {
@@ -235,11 +243,24 @@ export class HostRuntime {
   }
 
   _checkRoundEnd(now) {
-    const aliveA = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'A' && p.alive).length;
-    const aliveB = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'B' && p.alive).length;
-    if (aliveA === 0 && aliveB > 0) this._resolveRound('B', now);
-    else if (aliveB === 0 && aliveA > 0) this._resolveRound('A', now);
-    else if (aliveA === 0 && aliveB === 0) this._resolveRound(null, now);
+    // Grace window so round doesn't insta-resolve on the tick we enter ROUND_LIVE.
+    if (this._liveStartedAt && now - this._liveStartedAt < 1500) return;
+
+    const teamA = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'A');
+    const teamB = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'B');
+    // If a team has no members at all (e.g., everyone left), don't use that as a win condition.
+    if (teamA.length === 0 || teamB.length === 0) return;
+    const aliveA = teamA.filter(p => p.alive).length;
+    const aliveB = teamB.filter(p => p.alive).length;
+
+    if (aliveA === 0 && aliveB > 0) { this._logWipe('A', teamA, teamB); this._resolveRound('B', now); }
+    else if (aliveB === 0 && aliveA > 0) { this._logWipe('B', teamA, teamB); this._resolveRound('A', now); }
+    else if (aliveA === 0 && aliveB === 0) { this._logWipe('draw', teamA, teamB); this._resolveRound(null, now); }
+  }
+
+  _logWipe(side, teamA, teamB) {
+    const dump = arr => arr.map(p => `${p.name}(alive=${p.alive}, hp=${p.hp})`).join(', ');
+    console.log(`[host] round resolve (${side} wiped):  A=[${dump(teamA)}]  B=[${dump(teamB)}]`);
   }
 
   _resolveRound(winner, now) {

@@ -628,6 +628,13 @@ function onPhaseEnter(phase, prev) {
   }
   if (phase === PHASE.AGENT_SELECT) {
     controller.releasePointer();
+    // Teleport to team's spawn area so you can see your team while picking an agent.
+    if (me?.team) {
+      const sp = SPAWNS[me.team === 'A' ? 'teamA' : 'teamB'];
+      const pick = sp[Math.floor(Math.random() * sp.length)];
+      controller.teleport(pick.x, pick.z, me.team === 'A' ? 0 : Math.PI);
+    }
+    setBarriersActive(true);
   }
   if (phase === PHASE.LOBBY) {
     currentTeam = null;
