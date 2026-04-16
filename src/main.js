@@ -285,6 +285,35 @@ function weaponHasScope(id) {
   return id === 'operator';
 }
 
+// -------- fullscreen + keyboard lock (block Ctrl+W etc. during matches) -----
+function isMatchPhase(phase) {
+  return phase === PHASE.BUY || phase === PHASE.ROUND_LIVE || phase === PHASE.ROUND_END;
+}
+
+async function enterGameMode() {
+  try {
+    if (!document.fullscreenElement) {
+      await document.documentElement.requestFullscreen({ navigationUI: 'hide' });
+    }
+  } catch (err) { /* user denied or not allowed from this event — pointer lock still works */ }
+  try {
+    // Chromium's Keyboard Lock API: captures system shortcuts (Ctrl+W, Alt+Tab, etc.)
+    // when in fullscreen. No-op on Firefox/Safari.
+    if (navigator.keyboard?.lock) await navigator.keyboard.lock();
+  } catch (err) { /* ignore */ }
+}
+
+function exitGameMode() {
+  try { navigator.keyboard?.unlock?.(); } catch {}
+  try { if (document.fullscreenElement) document.exitFullscreen?.(); } catch {}
+}
+
+// Re-assert keyboard lock when user clicks canvas during a match phase.
+// (Chrome requires a user gesture to enter fullscreen.)
+document.getElementById('game').addEventListener('click', () => {
+  if (client && isMatchPhase(client.state.phase)) enterGameMode();
+});
+
 document.addEventListener('mousedown', (e) => {
   unlockAudio();
   if (!controller.locked) return;
@@ -298,8 +327,23 @@ document.addEventListener('contextmenu', (e) => {
   if (controller.locked) e.preventDefault();
 });
 window.addEventListener('blur', () => setAim(false));
+// Keys that trigger browser actions (close tab, reload, etc.) — swallow them
+// while we're pointer-locked so the player doesn't lose their match.
+const BROWSER_SHORTCUT_KEYS = new Set([
+  'KeyW', 'KeyT', 'KeyN', 'KeyR', 'KeyQ', 'KeyP', 'KeyL', 'KeyD', 'KeyJ', 'KeyH', 'KeyF',
+]);
+const ALWAYS_SWALLOW = new Set(['F5', 'F11', 'Tab']);
+
 document.addEventListener('keydown', (e) => {
   unlockAudio();
+  // Fallback for browsers without Keyboard Lock: we can at least preventDefault
+  // page-level handlers (doesn't stop Ctrl+W in Chrome without keyboard.lock,
+  // but does stop Tab focus escape, F5 reload, etc.)
+  if (controller.locked) {
+    if ((e.ctrlKey || e.metaKey) && BROWSER_SHORTCUT_KEYS.has(e.code)) e.preventDefault();
+    if (ALWAYS_SWALLOW.has(e.code) && !e.ctrlKey && !e.altKey) e.preventDefault();
+  }
+
   if (e.code === 'KeyR') {
     if (client?.state.phase === PHASE.LOBBY) toggleReady();
     else tryReload();
@@ -685,9 +729,11 @@ function onPhaseEnter(phase, prev) {
   }
   if (phase === PHASE.MATCH_END) {
     controller.releasePointer();
+    exitGameMode();
   }
   if (phase === PHASE.AGENT_SELECT) {
     controller.releasePointer();
+    exitGameMode();
     // Teleport to team's spawn area so you can see your team while picking an agent.
     if (me?.team) {
       const sp = SPAWNS[me.team === 'A' ? 'teamA' : 'teamB'];
@@ -700,6 +746,7 @@ function onPhaseEnter(phase, prev) {
     currentTeam = null;
     currentReady = false;
     controller.releasePointer(); // want cursor for ready button
+    exitGameMode();
     setBarriersActive(false);
     clearAllSmokes();
     if (prev) {
