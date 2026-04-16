@@ -551,6 +551,12 @@ let anyDuelActive = false;
 let isSpectating = false;
 
 function updateSpectating() {
+  // Keep the practice bot's phase glued to mine whenever it's my duel
+  // partner, so the shared peer-rendering logic treats it like any other
+  // duellist.
+  const bot = peers.get(BOT_ID);
+  if (bot) bot.phase = (duelPartnerId === BOT_ID) ? phase : 'overworld';
+
   const myInDuel = isDuelPhaseName(phase);
   anyDuelActive = myInDuel;
   if (!myInDuel) {
@@ -776,6 +782,80 @@ function updateSplats(dt) {
     }
     if (s.life < 2.0) s.mat.opacity = (s.life / 2.0) * 0.85;
   }
+}
+
+// --- Victory confetti: colorful planes falling over the arena ---
+const confetti = [];
+const CONFETTI_GRAVITY = 3.5;
+
+function spawnConfetti(n = 90) {
+  for (let i = 0; i < n; i++) {
+    const geo = new THREE.PlaneGeometry(0.18, 0.26);
+    const mat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color().setHSL(Math.random(), 0.85, 0.6),
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(
+      ARENA_CENTER.x + (Math.random() - 0.5) * 7,
+      ARENA_CENTER.y + 9 + Math.random() * 2.5,
+      ARENA_CENTER.z + (Math.random() - 0.5) * 7,
+    );
+    mesh.rotation.set(
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+      Math.random() * Math.PI,
+    );
+    scene.add(mesh);
+    confetti.push({
+      mesh, geo, mat,
+      vel: new THREE.Vector3(
+        (Math.random() - 0.5) * 3,
+        (Math.random() - 0.5) * 1.5 - 1,
+        (Math.random() - 0.5) * 3,
+      ),
+      spin: new THREE.Vector3(
+        (Math.random() - 0.5) * 6,
+        (Math.random() - 0.5) * 6,
+        (Math.random() - 0.5) * 6,
+      ),
+      life: 7.0,
+    });
+  }
+}
+
+function updateConfetti(dt) {
+  for (let i = confetti.length - 1; i >= 0; i--) {
+    const c = confetti[i];
+    c.vel.y -= CONFETTI_GRAVITY * dt;
+    // Gentle air drag so they flutter instead of plummet.
+    c.vel.x *= 0.995;
+    c.vel.z *= 0.995;
+    c.mesh.position.addScaledVector(c.vel, dt);
+    c.mesh.rotation.x += c.spin.x * dt;
+    c.mesh.rotation.y += c.spin.y * dt;
+    c.mesh.rotation.z += c.spin.z * dt;
+    c.life -= dt;
+    if (c.life < 1.5) c.mat.opacity = Math.max(0, c.life / 1.5);
+    c.mat.transparent = c.life < 1.5;
+    if (c.life <= 0 || c.mesh.position.y < -0.3) {
+      scene.remove(c.mesh);
+      c.geo.dispose();
+      c.mat.dispose();
+      confetti.splice(i, 1);
+    }
+  }
+}
+
+// --- Fullscreen flash (CSS animation) ---
+const flashEl = document.getElementById('flash');
+function triggerFlash(color) {
+  if (!flashEl) return;
+  flashEl.style.background = color;
+  flashEl.classList.remove('flashing');
+  // Force reflow so restarting the CSS animation actually retriggers.
+  void flashEl.offsetWidth;
+  flashEl.classList.add('flashing');
 }
 
 // ====================================================================
@@ -1072,6 +1152,7 @@ function makePeerState(id) {
     walkPhase: 0,
     isMoving:  false,
     phase:     'overworld',
+    isBot:     false,
   };
 }
 
@@ -1094,6 +1175,82 @@ function removePeer(id) {
 
 function duelPartner() {
   return duelPartnerId ? peers.get(duelPartnerId) || null : null;
+}
+
+// --- Practice bot: a local fake peer you can duel solo ---
+const BOT_ID = 'bot';
+const BOT_HOME = new THREE.Vector3(-4, 0, 4);
+const BOT_STROLL_R = 1.0;
+
+function spawnBot() {
+  const b = makePeerState(BOT_ID);
+  b.username = 'Practice Bot';
+  b.colorHex = '#ff9933';
+  b.avatar.body.material.color.set(b.colorHex);
+  // Warm tint on the cape too so it's visually distinct from real peers.
+  const cape = b.avatar.cape;
+  if (cape) {
+    cape.material.color.set(b.colorHex);
+    cape.material.emissive.set(b.colorHex);
+  }
+  // Distinct nameplate so you can tell the bot from real opponents.
+  b.nameplate.textContent = b.username;
+  b.nameplate.style.color = '#ffb066';
+  b.nameplate.style.borderColor = '#ff9933';
+  b.nameplate.style.textShadow = '0 0 8px #ff9933';
+  b.pos.copy(BOT_HOME);
+  b.rot = 0;
+  b.avatar.group.position.copy(b.pos);
+  b.avatar.group.rotation.y = b.rot;
+  b.isBot = true;
+  peers.set(BOT_ID, b);
+}
+spawnBot();
+
+function botChooseMove() {
+  // Mild heuristic: mostly random, but sometimes counter the player's last
+  // move, and occasionally mirror it — unpredictable enough to be a fight.
+  const myLast = lastMoves?.me;
+  const r = Math.random();
+  if (myLast != null && r < 0.3) return MOVE_LOSES_TO[myLast];
+  if (myLast != null && r < 0.5) return myLast;
+  return 1 + Math.floor(Math.random() * 3);
+}
+
+function scheduleBotMove() {
+  if (duelPartnerId !== BOT_ID) return;
+  const roundAtSchedule = roundIndex;
+  const delay = 800 + Math.random() * 1800;
+  setTimeout(() => {
+    if (duelPartnerId !== BOT_ID) return;
+    if (phase !== 'duel-picking') return;
+    if (roundIndex !== roundAtSchedule) return;
+    const partner = duelPartner();
+    if (!partner || partner.duelMove != null) return;
+    handleOpponentMove({ roundIndex, move: botChooseMove() });
+  }, delay);
+}
+
+function updateBot(dt) {
+  const b = peers.get(BOT_ID);
+  if (!b) return;
+  if (duelPartnerId === BOT_ID) return; // beginDuel owns the pose during a fight
+  // Slow lazy stroll around BOT_HOME so the bot doesn't look frozen.
+  const t = performance.now() * 0.0004;
+  const prevX = b.pos.x, prevZ = b.pos.z;
+  b.pos.set(
+    BOT_HOME.x + Math.cos(t) * BOT_STROLL_R,
+    0,
+    BOT_HOME.z + Math.sin(t) * BOT_STROLL_R,
+  );
+  const dx = b.pos.x - prevX, dz = b.pos.z - prevZ;
+  if (dx !== 0 || dz !== 0) {
+    b.rot = Math.atan2(dx, dz);
+    b.walkPhase += dt * 6;
+    b.isMoving = true;
+  } else {
+    b.isMoving = false;
+  }
 }
 
 // Phase FSM
@@ -1322,7 +1479,7 @@ function findNearestPeerInRange(maxDist) {
 }
 
 function tryChallenge() {
-  if (phase !== 'overworld' || !sendChallenge) return;
+  if (phase !== 'overworld') return;
   if (peers.size === 0) {
     flashCenterMsg('No opponents connected');
     return;
@@ -1333,6 +1490,12 @@ function tryChallenge() {
     return;
   }
   duelPartnerId = target.id;
+  // The practice bot accepts instantly — no network round-trip.
+  if (target.id === BOT_ID) {
+    beginDuel();
+    return;
+  }
+  if (!sendChallenge) return;
   phase = 'challenge-sent';
   challengeExpiresAt = performance.now() + 12000;
   showCenterMsg(`Challenge sent to ${target.username}…`);
@@ -1387,8 +1550,8 @@ function handleChallenge(data, peerId) {
 function beginDuel() {
   const partner = duelPartner();
   if (!partner) return;
-  // Lower peer id drives rounds between us.
-  iAmHost = myPeerId < partner.id;
+  // Lower peer id drives rounds between us. Against the bot I always host.
+  iAmHost = partner.id === BOT_ID ? true : (myPeerId < partner.id);
   // Release the mouse so the arena cinematic cam isn't fighting pointer-lock input.
   if (document.pointerLockElement === canvas) document.exitPointerLock();
   phase = 'entering-arena';
@@ -1430,9 +1593,11 @@ function beginDuel() {
 }
 
 function hostAdvanceRound() {
-  if (!iAmHost || !sendRound || !duelPartnerId) return;
+  if (!iAmHost || !duelPartnerId) return;
   const next = roundIndex + 1;
-  sendRound({ action: 'start', roundIndex: next }, duelPartnerId);
+  if (duelPartnerId !== BOT_ID && sendRound) {
+    sendRound({ action: 'start', roundIndex: next }, duelPartnerId);
+  }
   startRound(next);
 }
 
@@ -1456,6 +1621,7 @@ function startRound(idx) {
   showCenterMsg(`Round ${roundIndex} — lock in your move!`);
   showMoveHints(true);
   showTimer(true);
+  scheduleBotMove();
 }
 
 function pickMove(n) {
@@ -1466,7 +1632,9 @@ function pickMove(n) {
   const beats  = MOVE_NAME[MOVE_BEATS[n]];
   const losesTo = MOVE_NAME[MOVE_LOSES_TO[n]];
   showCenterMsg(`You picked ${MOVE_NAME[n]} — beats ${beats}, loses to ${losesTo}\nWaiting for opponent…`);
-  if (sendMove && duelPartnerId) sendMove({ roundIndex, move: n }, duelPartnerId);
+  if (sendMove && duelPartnerId && duelPartnerId !== BOT_ID) {
+    sendMove({ roundIndex, move: n }, duelPartnerId);
+  }
   checkBothMovesReady();
 }
 
@@ -1543,6 +1711,8 @@ function endDuel() {
     showCenterMsg('★ VICTORY ★\nThe crown is yours!');
     playFanfare();
     playCheer();
+    spawnConfetti();
+    triggerFlash('#ffe066');
   } else {
     if (me.hasCrown) {
       me.hasCrown = false;
@@ -1552,6 +1722,7 @@ function endDuel() {
       showCenterMsg('DEFEAT');
     }
     playDefeat();
+    triggerFlash('#a81a1a');
   }
   broadcastSelf();
 }
@@ -1576,6 +1747,11 @@ function returnToOverworld() {
     partner.avatar.armor.visible = false;
     partner.avatar.sword.visible = false;
     resetDuelPose(partner.avatar);
+    // Snap the bot back to its stroll arc so it doesn't ghost in the arena.
+    if (partner.id === BOT_ID) {
+      partner.pos.copy(BOT_HOME);
+      partner.avatar.group.position.copy(partner.pos);
+    }
   }
 
   duelPartnerId = null;
@@ -1823,6 +1999,12 @@ function updateAvatars(dt) {
       p.avatar.group.rotation.y = p.rot;
       p.isMoving = false;
       applyWalkAnim(p.avatar, 0, false, dt);
+    } else if (p.isBot) {
+      // The bot is local — snap directly to its prescribed pose and let
+      // updateBot drive walk state.
+      p.avatar.group.position.copy(p.pos);
+      p.avatar.group.rotation.y = p.rot;
+      applyWalkAnim(p.avatar, p.walkPhase, p.isMoving, dt);
     } else if (anyDuelActive) {
       const seat = seatPosForId(p.id);
       p.avatar.group.position.copy(seat);
@@ -1901,6 +2083,7 @@ function tick() {
 
   updateSpectating();
   updateMovement(dt);
+  updateBot(dt);
   checkPortalCollision();
   updatePhase(dt);
   updateAvatars(dt);
@@ -1908,6 +2091,7 @@ function tick() {
   updateSpectators(dt);
   updateTomatoes(dt);
   updateSplats(dt);
+  updateConfetti(dt);
   updatePortals(dt);
   updateCamera();
   updateNameplates();
