@@ -1,7 +1,7 @@
 import { PHASE, PHASE_DUR, MATCH, initialSnapshot } from './state.js';
 import { defaultInventory, WEAPONS, ARMOR, GRENADES, computeDamage } from '../combat/weapons.js';
 import { applyDamage, fullHeal, applyArmor } from '../combat/health.js';
-import { SPAWNS } from '../world/map.js';
+import { SPAWNS, raycastWorld } from '../world/map.js';
 import { AGENTS, DEFAULT_AGENT } from '../agents/index.js';
 
 // The host authoritative runtime. Owns the match state, validates intents,
@@ -318,6 +318,15 @@ export class HostRuntime {
     const victim = s.players[hitOwnerId];
     if (!victim || !victim.alive || victim.spectator) return;
     if (victim.team === shooter.team) return; // no friendly fire
+
+    // Anti-cheat: re-raycast against the host's own wall data. If a wall is
+    // closer than the reported hit distance, the shot was blocked — reject.
+    if (Array.isArray(o) && Array.isArray(d) && typeof hitDist === 'number') {
+      const origin = { x: o[0], y: o[1], z: o[2] };
+      const dir = { x: d[0], y: d[1], z: d[2] };
+      const wallT = raycastWorld(origin, dir, 300);
+      if (wallT + 0.05 < hitDist) return;
+    }
 
     const dmg = computeDamage(w, hitKind || 'body', hitDist || 0);
     const next = applyDamage(victim, dmg);

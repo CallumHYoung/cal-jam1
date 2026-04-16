@@ -30,7 +30,8 @@ export class MapPlacerUI {
     });
 
     document.addEventListener('keydown', (e) => {
-      if (this._open && (e.code === 'Escape' || e.code === 'KeyE')) {
+      // Only Escape closes — KeyE is the open trigger and would close it in the same event.
+      if (this._open && e.code === 'Escape') {
         this.close();
       }
     });

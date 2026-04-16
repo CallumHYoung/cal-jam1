@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createScene, triggerFlash, triggerDamageVignette } from './world/scene.js';
-import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive } from './world/map.js';
+import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive, raycastWorld } from './world/map.js';
 import {
   unlockAudio, playGunshot, playHitMarker, playReload, playBuy,
   playExplosion, playRoundWin, playRoundLose, playDeath, playAbility,
@@ -129,10 +129,13 @@ let client = null;     // ClientRuntime
     // host validates; clients just play local fire SFX if shooter isn't me
     if (fromId !== net.selfId) {
       playGunshot(WEAPONS[d.w]?.sound || 'rifle');
-      // tracer from their view
       const o = new THREE.Vector3().fromArray(d.o);
       const dir = new THREE.Vector3().fromArray(d.d);
-      const end = new THREE.Vector3().copy(o).add(dir.multiplyScalar(80));
+      // Clip the tracer at whichever is closer: a wall, the reported hit distance, or 80.
+      const wallT = raycastWorld(o, dir, 80);
+      const hitT = (typeof d.hitDist === 'number' && d.hitDist > 0) ? d.hitDist : 80;
+      const tracerT = Math.min(wallT, hitT, 80);
+      const end = new THREE.Vector3().copy(o).add(dir.clone().multiplyScalar(tracerT));
       fireTracer(scene, o, end, 0xff9466);
     }
     if (host) {
@@ -269,14 +272,32 @@ function clientAlive() {
 // -------- input: shooting + ability + grenade + reload ----------------------
 let lastShotAt = 0;
 let reloading = false;
+let aiming = false;     // right-mouse held
+let scoped = false;     // aiming + weapon supports scope
+const BASE_FOV = 78;
+const SCOPE_FOV = 22;
+
+function setAim(on) {
+  aiming = !!on;
+}
+
+function weaponHasScope(id) {
+  return id === 'operator';
+}
 
 document.addEventListener('mousedown', (e) => {
-  if (e.button !== 0) return;
   unlockAudio();
-  // only fire when the 3D view has pointer lock — otherwise the click is probably on UI
   if (!controller.locked) return;
-  tryFire();
+  if (e.button === 0) tryFire();
+  if (e.button === 2) { e.preventDefault(); setAim(true); }
 });
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 2) setAim(false);
+});
+document.addEventListener('contextmenu', (e) => {
+  if (controller.locked) e.preventDefault();
+});
+window.addEventListener('blur', () => setAim(false));
 document.addEventListener('keydown', (e) => {
   unlockAudio();
   if (e.code === 'KeyR') {
@@ -526,10 +547,8 @@ function loop() {
 
   // phase-aware input lock
   const phase = client?.state.phase || PHASE.LOBBY;
-  const lockLook = (phase === PHASE.AGENT_SELECT);
-  controller.canLook = !lockLook;
-  // no movement in agent select / match end
-  controller.canMove = phase === PHASE.LOBBY || phase === PHASE.BUY || phase === PHASE.ROUND_LIVE || phase === PHASE.ROUND_END;
+  controller.canLook = true;
+  controller.canMove = phase !== PHASE.MATCH_END;
 
   // phase change side-effects
   if (phase !== lastPhase) {
@@ -541,6 +560,27 @@ function loop() {
 
   // In lobby, track which team pad we're standing on
   updateTeamFromPads();
+
+  // Scope / ADS: only while holding RMB, weapon supports it, alive, live round.
+  const meNow = client?.state.players[net?.selfId];
+  const wantScope = aiming && controller.locked
+    && meNow && meNow.alive && !meNow.spectator
+    && weaponHasScope(meNow.weaponCurrent)
+    && phase === PHASE.ROUND_LIVE;
+  if (wantScope !== scoped) {
+    scoped = wantScope;
+    viewmodel.setScoped(scoped);
+    const overlay = document.getElementById('scopeOverlay');
+    if (overlay) overlay.classList.toggle('hidden', !scoped);
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) crosshair.classList.toggle('hidden', scoped);
+    controller.mouseSens = scoped ? 0.0009 : 0.0022;
+  }
+  const targetFov = scoped ? SCOPE_FOV : BASE_FOV;
+  if (Math.abs(camera.fov - targetFov) > 0.05) {
+    camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 16);
+    camera.updateProjectionMatrix();
+  }
 
   const moving = controller.keys['KeyW'] || controller.keys['KeyA'] || controller.keys['KeyS'] || controller.keys['KeyD'];
   viewmodel.update(dt, !!moving, controller.crouching);
@@ -558,11 +598,15 @@ function loop() {
         av.setDead(!p.spectator && !p.alive);
       }
       av.setSpectator(!!p.spectator);
-      // team-based nameplate color
+      // Nameplates only visible in the lobby (tactical shooter — no wallhacks in-match).
       const me = client.state.players[net.selfId];
       const enemy = me && me.team && p.team && p.team !== me.team;
       av.setName(p.name, enemy);
-      placeNameplate(av, camera, renderer);
+      if (client.state.phase === PHASE.LOBBY) {
+        placeNameplate(av, camera, renderer);
+      } else {
+        av.nameplate.style.display = 'none';
+      }
     }
   }
 
@@ -593,6 +637,22 @@ function loop() {
     // spectator overlay: visible when spectating any non-lobby phase
     const specEl = document.getElementById('spectatorHud');
     if (specEl) specEl.classList.toggle('hidden', !(isSpectator && s.phase !== PHASE.LOBBY));
+
+    // Phase banner: show during agent-select & round-end (other phases have their own UI).
+    const banner = document.getElementById('phaseBanner');
+    if (banner) {
+      const bannerPhases = {
+        [PHASE.AGENT_SELECT]: 'AGENT SELECT',
+        [PHASE.ROUND_END]:    'ROUND END',
+        [PHASE.MATCH_END]:    'MATCH END',
+      };
+      const label = bannerPhases[s.phase];
+      banner.classList.toggle('hidden', !label);
+      if (label) {
+        document.getElementById('phaseBannerLabel').textContent = label;
+        document.getElementById('phaseBannerTimer').textContent = rem;
+      }
+    }
   }
 
   renderer.render(scene, camera);
