@@ -382,12 +382,13 @@ export class HostRuntime {
     }
   }
 
-  handleAbility(id, { type, pos }) {
+  handleAbility(id, payload) {
     const s = this.state;
     if (s.phase !== PHASE.ROUND_LIVE) return;
     const p = s.players[id];
     if (!p || !p.alive || p.spectator) return;
     if (p.abilityCharges <= 0) return;
+    const { type, pos, axis, width, height, duration } = payload || {};
     p.abilityCharges -= 1;
 
     if (type === 'riposte') {
@@ -397,6 +398,11 @@ export class HostRuntime {
       this.broadcast.event({
         type: 'ability', from: id, kind: 'skysmoke',
         pos, radius: 4.5, duration: 10,
+      });
+    } else if (type === 'barrierwall' && pos) {
+      this.broadcast.event({
+        type: 'ability', from: id, kind: 'barrierwall',
+        pos, axis: axis || 'x', width: width || 6, height: height || 2.6, duration: duration || 20,
       });
     }
   }

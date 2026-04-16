@@ -147,10 +147,12 @@ export function getTeamPadAt(x, z) {
   return null;
 }
 
-// Combined AABB list (permanents + active barriers). Rebuilt when barriers toggle.
+// Combined AABB list (permanents + active barriers + dynamic). Rebuilt on change.
 export const WORLD_AABBS = [];
 const PERMANENT_AABBS = [];
 const BARRIER_AABBS = [];
+const DYNAMIC_AABBS = new Map(); // id → aabb (from abilities like the Sentinel wall)
+let nextDynId = 1;
 let barriersActive = false;
 let barrierMeshes = [];
 
@@ -158,12 +160,24 @@ function rebuildAABBs() {
   WORLD_AABBS.length = 0;
   WORLD_AABBS.push(...PERMANENT_AABBS);
   if (barriersActive) WORLD_AABBS.push(...BARRIER_AABBS);
+  for (const a of DYNAMIC_AABBS.values()) WORLD_AABBS.push(a);
 }
 
 export function setBarriersActive(active) {
   barriersActive = !!active;
   for (const m of barrierMeshes) m.visible = barriersActive;
   rebuildAABBs();
+}
+
+export function addDynamicAABB(aabb) {
+  const id = nextDynId++;
+  DYNAMIC_AABBS.set(id, aabb);
+  rebuildAABBs();
+  return id;
+}
+
+export function removeDynamicAABB(id) {
+  if (DYNAMIC_AABBS.delete(id)) rebuildAABBs();
 }
 
 export function buildMap(scene) {

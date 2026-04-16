@@ -12,6 +12,7 @@ import { WEAPONS, defaultInventory } from './combat/weapons.js';
 import { fireTracer, spawnImpactDecal, updateBulletsVfx, raycastHit } from './combat/bullets.js';
 import { throwGrenade, updateGrenades } from './combat/grenades.js';
 import { spawnSmoke, updateSmokes, clearAllSmokes } from './combat/smoke.js';
+import { spawnBarrierWall, updateBarrierWalls, clearAllBarrierWalls } from './combat/walls.js';
 import { connectRoom } from './net/room.js';
 import { HostRuntime } from './game/host.js';
 import { ClientRuntime } from './game/client.js';
@@ -499,6 +500,26 @@ function tryAbility() {
         controller.requestPointer();
       },
     });
+  } else if (ability.id === 'barrierwall') {
+    // Place a wall in front of the player, axis-aligned by dominant look direction.
+    const fwd = controller.getMoveForward();
+    const offset = ability.offset || 4;
+    const cx = controller.pos.x + fwd.x * offset;
+    const cz = controller.pos.z + fwd.z * offset;
+    // Axis convention: 'x' means wall runs along X (blocks N/S), 'z' means along Z (blocks E/W).
+    const axis = Math.abs(fwd.x) > Math.abs(fwd.z) ? 'z' : 'x';
+    const payload = {
+      type: 'barrierwall',
+      pos: [cx, 0, cz],
+      axis,
+      width: ability.width,
+      height: ability.height,
+      duration: ability.duration,
+    };
+    net.sendAbility(payload);
+    if (host) host.handleAbility(net.selfId, payload);
+    playAbility();
+    triggerFlash('#9cffb4', 180);
   }
 }
 
@@ -561,6 +582,15 @@ function handleEventLocal(e) {
     if (e.kind === 'skysmoke' && e.pos) {
       const worldPos = new THREE.Vector3(e.pos[0], e.pos[1] || 0, e.pos[2]);
       spawnSmoke(scene, worldPos, e.radius || 4.5, e.duration || 10);
+    }
+    if (e.kind === 'barrierwall' && e.pos) {
+      spawnBarrierWall(scene, {
+        cx: e.pos[0], cz: e.pos[2],
+        axis: e.axis || 'x',
+        width: e.width || 6,
+        height: e.height || 2.6,
+        duration: e.duration || 20,
+      });
     }
   }
 }
@@ -657,10 +687,11 @@ function loop() {
   // host tick
   if (host) host.tick(Date.now());
 
-  // bullets/grenades/smokes
+  // bullets/grenades/smokes/walls
   updateBulletsVfx(dt, scene);
   updateGrenades(dt, scene, host ? (info) => host.handleGrenadeExplosion(info) : null);
   updateSmokes(dt);
+  updateBarrierWalls(dt, scene);
 
   // UI render
   if (client) {
@@ -720,6 +751,7 @@ function onPhaseEnter(phase, prev) {
     controller.releasePointer(); // release so buy menu clicks register
     setBarriersActive(true);     // attackers can't leave spawn yet
     clearAllSmokes();
+    clearAllBarrierWalls(scene);
     hud.centerShow(`BUY PHASE · Round ${client.state.round} · press B to close shop`, 3000);
   }
   if (phase === PHASE.ROUND_LIVE) {
@@ -749,6 +781,7 @@ function onPhaseEnter(phase, prev) {
     exitGameMode();
     setBarriersActive(false);
     clearAllSmokes();
+    clearAllBarrierWalls(scene);
     if (prev) {
       // returning from match-end: teleport back to lobby spawn and reset
       controller.teleport(LOBBY_SPAWN.x, LOBBY_SPAWN.z);

@@ -11,7 +11,7 @@ export const PHASE = {
 export const PHASE_DUR = {
   [PHASE.AGENT_SELECT]: 20,
   [PHASE.BUY]:          15,
-  [PHASE.ROUND_LIVE]:   100,
+  [PHASE.ROUND_LIVE]:   120,
   [PHASE.ROUND_END]:    4,
   [PHASE.MATCH_END]:    10,
 };
