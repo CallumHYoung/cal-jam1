@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Cal-Jam Fencing Duel</title>
+<title>Cal-Jam Tac Ops</title>
 <link rel="stylesheet" href="style.css" />
 <script type="importmap">
 {
@@ -15,49 +15,108 @@
 </head>
 <body>
 <canvas id="game"></canvas>
-<div id="hud">
-  <div id="username">loading…</div>
-  <div id="peers">connecting…</div>
-  <div id="hint">WASD to move • F to challenge nearby opponent</div>
-</div>
-<div id="overlay">
-  <div id="scorePanel" class="hidden">
-    <div id="scoreMe">0</div>
-    <div id="scoreSep">—</div>
-    <div id="scoreOpp">0</div>
-  </div>
-  <div id="centerMsg" class="hidden"></div>
-  <div id="timer" class="hidden">4</div>
-  <div id="moveHints" class="hidden">
-    <div class="moveKey" data-move="1">
-      <div class="top"><span class="k">1</span> Thrust</div>
-      <div class="sub"><span class="beats">beats Feint</span> · <span class="loses">loses to Parry</span></div>
-    </div>
-    <div class="moveKey" data-move="2">
-      <div class="top"><span class="k">2</span> Parry</div>
-      <div class="sub"><span class="beats">beats Thrust</span> · <span class="loses">loses to Feint</span></div>
-    </div>
-    <div class="moveKey" data-move="3">
-      <div class="top"><span class="k">3</span> Feint</div>
-      <div class="sub"><span class="beats">beats Parry</span> · <span class="loses">loses to Thrust</span></div>
-    </div>
-  </div>
-</div>
-<button id="portalBtn">no portal</button>
+
 <div id="flash"></div>
-<div id="welcomeCard">
-  <h2>Fencing Duel</h2>
-  <div class="rows">
-    <div><span class="key">WASD</span> move · <span class="key">click</span> for mouse look</div>
-    <div>Walk up to another player (or the <span style="color:#ffb066">Practice Bot</span>) · <span class="key">F</span> to challenge · <span class="key">Y</span> to accept</div>
-    <div>In the arena: <span class="key">1</span> Thrust · <span class="key">2</span> Parry · <span class="key">3</span> Feint</div>
-    <div class="triangle">Thrust beats Feint · Feint beats Parry · Parry beats Thrust · first to 3 wins a crown</div>
-    <div>While spectating: <span class="key">T</span> to throw a rotten tomato</div>
-    <div>Walk into a glowing cyan gate to portal to another jam game</div>
+<div id="damageVignette"></div>
+
+<!-- In-world HUD (first person, round-live) -->
+<div id="hud" class="hidden">
+  <div id="crosshair"><span></span><span></span><span></span><span></span></div>
+  <div id="hudTop">
+    <div id="scoreTeam" class="score t-ally">0</div>
+    <div id="roundInfo">
+      <div id="roundNum">ROUND 1</div>
+      <div id="roundTimer">1:40</div>
+    </div>
+    <div id="scoreEnemy" class="score t-enemy">0</div>
   </div>
-  <div class="dismiss">click or press any key to dismiss</div>
+  <div id="killfeed"></div>
+  <div id="hudBottomLeft">
+    <div id="hpRow"><span id="hpIcon">♥</span><span id="hpVal">100</span><span id="armorIcon">▰</span><span id="armorVal">0</span></div>
+    <div id="moneyRow"><span class="cashIcon">$</span><span id="moneyVal">800</span></div>
+  </div>
+  <div id="hudBottomRight">
+    <div id="weaponName">CLASSIC</div>
+    <div id="ammoRow"><span id="ammoMag">12</span><span class="ammoSep">/</span><span id="ammoReserve">36</span></div>
+    <div id="abilityRow"><span class="abKey">E</span><span id="abName">Riposte</span><span id="abCharges">1</span></div>
+  </div>
+  <div id="hitMarker"></div>
 </div>
+
+<!-- Scoreboard (Tab) -->
+<div id="scoreboard" class="hidden">
+  <div class="sbHeader">
+    <div class="sbLabel t-ally">ALLIES</div>
+    <div class="sbScore"><span id="sbAlly">0</span> — <span id="sbEnemy">0</span></div>
+    <div class="sbLabel t-enemy">ENEMIES</div>
+  </div>
+  <div class="sbBody">
+    <div id="sbAllyList"></div>
+    <div id="sbEnemyList"></div>
+  </div>
+</div>
+
+<!-- Lobby HUD (in-world lobby — player info panel + ready controls) -->
+<div id="lobby">
+  <div id="lobbyPanel">
+    <div class="lpTitle">LOBBY · <span id="lobbyCount">1</span>/10</div>
+    <div class="lpTeams">
+      <div class="lpTeam t-ally"><span class="lpTeamName">ALPHA</span> <span id="lobbyListA"></span></div>
+      <div class="lpTeam t-enemy"><span class="lpTeamName">BRAVO</span> <span id="lobbyListB"></span></div>
+      <div class="lpTeam t-unassigned"><span class="lpTeamName">UNASSIGNED</span> <span id="lobbyListU"></span></div>
+    </div>
+  </div>
+  <div id="lobbyFooter">
+    <div class="lfInstructions">
+      <span class="key">WASD</span> walk onto a blue or red pad to pick team ·
+      <span class="key">R</span> ready ·
+      <span class="key">Click</span> mouse look
+    </div>
+    <div id="lobbyStatus">step onto a team pad to begin</div>
+  </div>
+  <button id="readyBtn" class="primaryBtn">READY UP (R)</button>
+</div>
+
+<!-- Agent select -->
+<div id="agentSelect" class="hidden">
+  <div class="selectTop">SELECT AGENT · <span id="agentTimer">20</span>s</div>
+  <div id="agentGrid"></div>
+  <div class="selectBottom">
+    <div id="agentPreviewName">—</div>
+    <div id="agentPreviewDesc">—</div>
+    <button id="agentLockBtn" class="primaryBtn">LOCK IN</button>
+  </div>
+</div>
+
+<!-- Buy menu -->
+<div id="buyMenu" class="hidden">
+  <div class="buyTop">
+    <div>BUY PHASE · <span id="buyTimer">15</span>s</div>
+    <div class="buyCash"><span class="cashIcon">$</span><span id="buyMoney">800</span></div>
+  </div>
+  <div id="buyGrid"></div>
+  <div class="buyBottom">ESC / B · close · purchases lock when round starts</div>
+</div>
+
+<!-- Map placer overlay (Controller's Sky Smoke) -->
+<div id="mapPlacer" class="hidden">
+  <div class="mpTop">SKY SMOKE · click anywhere on the map to deploy · <span class="key">ESC</span> cancel</div>
+  <canvas id="mapPlacerCanvas" width="700" height="700"></canvas>
+  <div class="mpBottom">charges remaining: <span id="mpCharges">2</span></div>
+</div>
+
+<!-- Center message (round result, phase transitions) -->
+<div id="centerMsg" class="hidden"></div>
+<div id="matchEnd" class="hidden">
+  <h2 id="matchEndTitle">VICTORY</h2>
+  <div id="matchEndScore">5 — 3</div>
+  <div class="note">returning to lobby…</div>
+</div>
+
+<!-- Portal button (jam travel) -->
+<button id="portalBtn">no portal</button>
+
 <script src="portal.js"></script>
-<script type="module" src="game.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>
