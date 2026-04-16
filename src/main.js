@@ -195,9 +195,8 @@ let client = null;     // ClientRuntime
   agentSelect = new AgentSelectUI({
     onPick: (id) => {
       currentAgent = id;
-      net.sendPres({ name: myName, color: myColor, agent: id, ready: true });
+      sendPres();
       if (host) host.setAgent(net.selfId, id);
-      agentSelect.root.classList.add('hidden');
     },
   });
 })();
@@ -302,7 +301,7 @@ function switchWeapon(slot) {
 function tryFire() {
   if (!net || !client) return;
   const me = client.state.players[net.selfId];
-  if (!me || !me.alive) return;
+  if (!me || !me.alive || me.spectator) return;
   if (client.state.phase !== PHASE.ROUND_LIVE) return;
 
   const wId = me.weaponCurrent || 'classic';
@@ -332,7 +331,7 @@ function tryFire() {
   const hitboxes = [];
   for (const [id, av] of peerAvatars) {
     const p = client.state.players[id];
-    if (!p || !p.alive) continue;
+    if (!p || !p.alive || p.spectator) continue;
     if (p.team && p.team === me.team) continue;
     for (const hb of av.getHitboxes(av.group.position)) {
       hitboxes.push({ ...hb, ownerId: id });
@@ -401,7 +400,7 @@ function tryReload() {
 
 function tryAbility() {
   const me = client?.state.players[net?.selfId];
-  if (!me || !me.alive) return;
+  if (!me || !me.alive || me.spectator) return;
   if (client.state.phase !== PHASE.ROUND_LIVE) return;
   if (me.abilityCharges <= 0) return;
   const ability = getAbility(me.agent || DEFAULT_AGENT);
@@ -440,7 +439,7 @@ function tryAbility() {
 
 function tryGrenade() {
   const me = client?.state.players[net?.selfId];
-  if (!me || !me.alive) return;
+  if (!me || !me.alive || me.spectator) return;
   if (client.state.phase !== PHASE.ROUND_LIVE) return;
   if ((me.inventory?.grenades?.frag || 0) <= 0) return;
   me.inventory.grenades.frag -= 1;
@@ -556,8 +555,9 @@ function loop() {
       if (pose) {
         av.group.position.lerp(new THREE.Vector3(pose.x, 0, pose.z), Math.min(1, dt * 10));
         av.group.rotation.y = pose.yaw + Math.PI; // face their forward
-        av.setDead(!p.alive);
+        av.setDead(!p.spectator && !p.alive);
       }
+      av.setSpectator(!!p.spectator);
       // team-based nameplate color
       const me = client.state.players[net.selfId];
       const enemy = me && me.team && p.team && p.team !== me.team;
@@ -579,16 +579,20 @@ function loop() {
     const s = client.state;
     const rem = client.phaseRemaining();
     const me = client.state.players[net.selfId];
+    const isSpectator = !!me?.spectator;
     lobby?.render({ phase: s.phase, players: s.players, selfId: net.selfId, startCountdown: s.startCountdown || 0 });
     agentSelect?.render({ phase: s.phase, remainingSec: rem, me });
-    buyMenu?.render({ phase: s.phase, remainingSec: rem, money: me?.money ?? 0, inventory: me?.inventory ?? defaultInventory() });
+    buyMenu?.render({ phase: s.phase, remainingSec: rem, money: me?.money ?? 0, inventory: me?.inventory ?? defaultInventory(), spectator: isSpectator });
     const ammo = me ? getAmmo(me.weaponCurrent || 'classic') : null;
     hud.render({
       phase: s.phase, round: s.round, scoreA: s.scoreA, scoreB: s.scoreB,
-      remainingSec: rem, me, ammo, team: me?.team, events: client.recentEvents,
+      remainingSec: rem, me: isSpectator ? null : me, ammo, team: me?.team, events: client.recentEvents,
     });
     hud.update(dt);
     scoreboard.render({ players: s.players, me, scoreA: s.scoreA, scoreB: s.scoreB });
+    // spectator overlay: visible when spectating any non-lobby phase
+    const specEl = document.getElementById('spectatorHud');
+    if (specEl) specEl.classList.toggle('hidden', !(isSpectator && s.phase !== PHASE.LOBBY));
   }
 
   renderer.render(scene, camera);

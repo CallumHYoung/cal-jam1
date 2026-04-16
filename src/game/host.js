@@ -45,7 +45,7 @@ export class HostRuntime {
   }
 
   _checkAutoStart(now) {
-    const players = Object.values(this.state.players);
+    const players = Object.values(this.state.players).filter(p => !p.spectator);
     if (players.length < 2) { this._startAt = 0; this.state.startCountdown = 0; return; }
     const allTeamed = players.every(p => p.team === 'A' || p.team === 'B');
     const allReady = players.every(p => p.ready);
@@ -85,13 +85,26 @@ export class HostRuntime {
   /* ---------- lobby + presence ---------- */
 
   upsertPlayer(id, patch) {
+    const isNew = !this.state.players[id];
     const existing = this.state.players[id] || {
       name: id.slice(0, 6), color: '#c64bff', team: null, agent: 'duelist',
       hp: 100, armor: 0, armorType: null, money: MATCH.START_MONEY, alive: true,
       ready: false, weaponCurrent: 'classic', inventory: defaultInventory(),
       abilityCharges: 1, abilityActiveUntil: 0, kills: 0, deaths: 0,
+      spectator: false,
     };
-    this.state.players[id] = { ...existing, ...patch };
+    if (isNew && this.state.phase !== PHASE.LOBBY) {
+      existing.spectator = true;
+      existing.team = null;
+      existing.alive = false;
+    }
+    // Spectators can't change team or ready via pres — ignore those fields until the match ends.
+    const filtered = { ...patch };
+    if (existing.spectator) {
+      delete filtered.team;
+      delete filtered.ready;
+    }
+    this.state.players[id] = { ...existing, ...filtered };
   }
 
   removePlayer(id) {
@@ -110,14 +123,13 @@ export class HostRuntime {
 
   startMatch(now) {
     // teams are taken from the presence-set `team` (players pick them in the lobby)
-    const ids = Object.keys(this.state.players);
+    const ids = Object.keys(this.state.players).filter(id => !this.state.players[id].spectator);
     if (ids.length < 2) return false;
     for (const id of ids) {
       const p = this.state.players[id];
-      // if someone hasn't picked a team, auto-assign to the smaller side
       if (p.team !== 'A' && p.team !== 'B') {
-        const countA = Object.values(this.state.players).filter(q => q.team === 'A').length;
-        const countB = Object.values(this.state.players).filter(q => q.team === 'B').length;
+        const countA = Object.values(this.state.players).filter(q => !q.spectator && q.team === 'A').length;
+        const countB = Object.values(this.state.players).filter(q => !q.spectator && q.team === 'B').length;
         p.team = countA <= countB ? 'A' : 'B';
       }
       p.money = MATCH.START_MONEY;
@@ -145,6 +157,7 @@ export class HostRuntime {
     if (phase === PHASE.BUY) {
       // respawn all, heal to full
       for (const p of Object.values(this.state.players)) {
+        if (p.spectator || !p.team) continue; // skip spectators + unassigned
         const spawns = SPAWNS[p.team === 'A' ? 'teamA' : 'teamB'];
         const pick = spawns[Math.floor(Math.random() * spawns.length)];
         p.spawn = pick;
@@ -204,12 +217,14 @@ export class HostRuntime {
         this._enter(PHASE.BUY, now);
       }
     } else if (cur === PHASE.MATCH_END) {
-      // back to lobby
+      // back to lobby — spectators rejoin as regular players
       for (const p of Object.values(this.state.players)) {
         p.team = null;
         p.money = MATCH.START_MONEY;
         p.ready = false;
         p.inventory = defaultInventory();
+        p.spectator = false;
+        p.alive = true;
       }
       this.state.round = 0;
       this.state.scoreA = 0;
@@ -220,8 +235,8 @@ export class HostRuntime {
   }
 
   _checkRoundEnd(now) {
-    const aliveA = Object.values(this.state.players).filter(p => p.team === 'A' && p.alive).length;
-    const aliveB = Object.values(this.state.players).filter(p => p.team === 'B' && p.alive).length;
+    const aliveA = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'A' && p.alive).length;
+    const aliveB = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'B' && p.alive).length;
     if (aliveA === 0 && aliveB > 0) this._resolveRound('B', now);
     else if (aliveB === 0 && aliveA > 0) this._resolveRound('A', now);
     else if (aliveA === 0 && aliveB === 0) this._resolveRound(null, now);
@@ -241,7 +256,7 @@ export class HostRuntime {
     const s = this.state;
     if (s.phase !== PHASE.BUY) return;
     const p = s.players[id];
-    if (!p) return;
+    if (!p || p.spectator) return;
 
     if (WEAPONS[item]) {
       const w = WEAPONS[item];
@@ -277,10 +292,10 @@ export class HostRuntime {
     const s = this.state;
     if (s.phase !== PHASE.ROUND_LIVE) return;
     const shooter = s.players[fromId];
-    if (!shooter || !shooter.alive) return;
+    if (!shooter || !shooter.alive || shooter.spectator) return;
     if (!hitOwnerId) return;
     const victim = s.players[hitOwnerId];
-    if (!victim || !victim.alive) return;
+    if (!victim || !victim.alive || victim.spectator) return;
     if (victim.team === shooter.team) return; // no friendly fire
 
     const dmg = computeDamage(w, hitKind || 'body', hitDist || 0);
@@ -310,7 +325,7 @@ export class HostRuntime {
     if (this.state.phase !== PHASE.ROUND_LIVE) return;
     const poses = this.getPeerPoses();
     for (const [id, p] of Object.entries(this.state.players)) {
-      if (!p.alive) continue;
+      if (!p.alive || p.spectator) continue;
       const pose = poses.get(id) || (id === this.selfId ? this._selfPose : null);
       if (!pose) continue;
       const dx = pose.x - pos.x;
@@ -341,7 +356,7 @@ export class HostRuntime {
     const s = this.state;
     if (s.phase !== PHASE.ROUND_LIVE) return;
     const p = s.players[id];
-    if (!p || !p.alive) return;
+    if (!p || !p.alive || p.spectator) return;
     if (p.abilityCharges <= 0) return;
     p.abilityCharges -= 1;
 

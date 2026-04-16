@@ -14,10 +14,14 @@ export class AgentSelectUI {
     this._hoverAgent = 'duelist';
 
     this.lockBtn.addEventListener('click', () => {
+      this._lockedIn = true;
+      this.root.classList.add('hidden');
       this.onPick(this._hoverAgent);
     });
 
     this._built = false;
+    this._lockedIn = false;
+    this._initedFromMe = false;
   }
 
   _build() {
@@ -57,10 +61,20 @@ export class AgentSelectUI {
   }
 
   render({ phase, remainingSec, me }) {
-    if (phase !== PHASE.AGENT_SELECT) { this.root.classList.add('hidden'); return; }
-    this.root.classList.remove('hidden');
+    if (phase !== PHASE.AGENT_SELECT) {
+      this.root.classList.add('hidden');
+      this._lockedIn = false;
+      this._initedFromMe = false;
+      return;
+    }
     if (!this._built) this._build();
-    if (me?.agent && me.agent !== this._hoverAgent) this._setHover(me.agent);
+    if (!this._lockedIn) this.root.classList.remove('hidden');
+    // Initialize hover from server-side agent ONCE when entering agent-select.
+    // Never overwrite the user's in-flight selection on subsequent frames.
+    if (!this._initedFromMe && me?.agent) {
+      this._setHover(me.agent);
+      this._initedFromMe = true;
+    }
     this.timer.textContent = Math.max(0, remainingSec);
   }
 }

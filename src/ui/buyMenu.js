@@ -57,7 +57,14 @@ export class BuyMenuUI {
   _show() { if (!this._built) this._build(); this._open = true; this._applyDOM(); }
   _applyDOM() { this.root.classList.toggle('hidden', !this._open); }
 
-  render({ phase, remainingSec, money, inventory }) {
+  render({ phase, remainingSec, money, inventory, spectator }) {
+    // spectators never see the buy menu
+    if (spectator) {
+      this._open = false;
+      this._applyDOM();
+      this._lastPhase = phase;
+      return;
+    }
     // phase-transition: auto-open only on entering BUY; force-close leaving BUY
     if (phase !== this._lastPhase) {
       if (phase === PHASE.BUY) this._show();

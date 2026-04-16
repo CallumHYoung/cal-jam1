@@ -97,6 +97,16 @@ export function makeAvatar({ teamColor = '#6a8bff', accentColor = '#c64bff' } = 
     nameplate.style.opacity = on ? '0.3' : '1';
   }
 
+  function setSpectator(on) {
+    for (const child of group.children) {
+      if (!child.material) continue;
+      child.material.transparent = true;
+      child.material.opacity = on ? 0.3 : 1;
+    }
+    nameplate.style.opacity = on ? '0.5' : '1';
+    nameplate.style.fontStyle = on ? 'italic' : 'normal';
+  }
+
   function setName(name, teamIsEnemy) {
     nameplate.textContent = name || '';
     nameplate.classList.toggle('enemy', !!teamIsEnemy);
@@ -106,7 +116,7 @@ export function makeAvatar({ teamColor = '#6a8bff', accentColor = '#c64bff' } = 
     nameplate.remove();
   }
 
-  return { group, getHitboxes, setAbilityGlow, setDead, setName, nameplate, dispose };
+  return { group, getHitboxes, setAbilityGlow, setDead, setSpectator, setName, nameplate, dispose };
 }
 
 // Project a world-space point to a screen CSS position; place nameplate.
