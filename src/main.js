@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createScene, triggerFlash, triggerDamageVignette } from './world/scene.js';
-import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive, raycastWorld, getBombSiteAt } from './world/map.js';
+import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive, raycastWorld, getBombSiteAt, resolveMovement } from './world/map.js';
 import {
   unlockAudio, playGunshot, playHitMarker, playReload, playBuy,
   playExplosion, playRoundWin, playRoundLose, playDeath, playAbility,
@@ -14,6 +14,7 @@ import { throwGrenade, updateGrenades } from './combat/grenades.js';
 import { spawnSmoke, updateSmokes, clearAllSmokes } from './combat/smoke.js';
 import { spawnBarrierWall, updateBarrierWalls, clearAllBarrierWalls } from './combat/walls.js';
 import { updateBombMesh } from './combat/bomb.js';
+import { spawnDroneVisual, updateDronePose, removeDroneVisual, spawnDroneExplosion, updateDronesVfx, clearAllDrones, getDroneY } from './combat/drone.js';
 import { connectRoom } from './net/room.js';
 import { HostRuntime } from './game/host.js';
 import { ClientRuntime } from './game/client.js';
@@ -154,6 +155,20 @@ let client = null;     // ClientRuntime
 
   net.onAbility((d, fromId) => {
     if (host) host.handleAbility(fromId, d);
+    // Drone visual replication for non-owner peers. The owner renders its
+    // own drone directly via local helpers — they never receive their own
+    // broadcast back (Trystero doesn't echo).
+    if (d?.type === 'drone') {
+      if (d.kind === 'spawn' && Array.isArray(d.pos)) {
+        spawnDroneVisual(scene, fromId, d.pos);
+      } else if (d.kind === 'move' && Array.isArray(d.pos)) {
+        updateDronePose(fromId, d.pos, typeof d.yaw === 'number' ? d.yaw : 0);
+      } else if (d.kind === 'detonate' && Array.isArray(d.pos)) {
+        spawnDroneExplosion(scene, d.pos, d.radius || 4.5);
+        removeDroneVisual(scene, fromId);
+        playExplosion();
+      }
+    }
   });
 
   net.onBuy((d, fromId) => {
@@ -289,6 +304,11 @@ const SCOPE_FOV = 22;
 // Bomb plant/defuse hold state (local; completion sends an intent to host).
 let bombHold = null; // { kind: 'plant'|'defuse', startT, pos: {x,z}, sent }
 
+// Tech drone state (only one active for the local player at a time).
+// When non-null, the main loop takes over camera/input to pilot it.
+let drone = null; // { pos:[x,y,z], yaw, t, life, radius, damage, speed, savedPitch }
+let lastDroneBroadcast = 0;
+
 function setAim(on) {
   aiming = !!on;
 }
@@ -381,6 +401,8 @@ function switchWeapon(slot) {
 }
 
 function tryFire() {
+  // While piloting a drone, LMB detonates it instead of firing a weapon.
+  if (drone) { detonateDrone(); return; }
   if (!net || !client) return;
   const me = client.state.players[net.selfId];
   if (!me || !me.alive || me.spectator) return;
@@ -481,6 +503,9 @@ function tryReload() {
 }
 
 function tryAbility() {
+  // E while piloting → detonate the drone.
+  if (drone) { detonateDrone(); return; }
+
   const me = client?.state.players[net?.selfId];
   if (!me || !me.alive || me.spectator) return;
   if (client.state.phase !== PHASE.ROUND_LIVE) return;
@@ -516,6 +541,8 @@ function tryAbility() {
         controller.requestPointer();
       },
     });
+  } else if (ability.id === 'recondrone') {
+    tryDeployDrone(ability);
   } else if (ability.id === 'barrierwall') {
     // Place a wall in front of the player, axis-aligned by dominant look direction.
     const fwd = controller.getMoveForward();
@@ -655,7 +682,111 @@ function updateBombHud() {
   defuseEl?.classList.toggle('hidden', !showDefuse);
 }
 
+function tryDeployDrone(ability) {
+  // Deploy at player's feet. Camera takes over on next tickDrone.
+  const meNow = client?.state.players[net?.selfId];
+  if (!meNow || !meNow.alive) return;
+  const pos = [controller.pos.x, getDroneY(), controller.pos.z];
+  drone = {
+    pos: [...pos],
+    yaw: controller.yaw,
+    t: 0,
+    life: ability.duration ?? 3.0,
+    radius: ability.radius ?? 4.5,
+    damage: ability.damage ?? 110,
+    speed: ability.speed ?? 14,
+    savedPitch: controller.pitch,
+  };
+  // Freeze the agent body in place while the pilot is flying.
+  controller.canMove = false;
+  controller.pitch = 0;        // drone has a wide pitch range; reset before piloting
+  viewmodel.group.visible = false;
+
+  const payload = { type: 'drone', kind: 'spawn', pos };
+  net.sendAbility(payload);
+  if (host) host.handleAbility(net.selfId, payload);
+  spawnDroneVisual(scene, net.selfId, pos);
+  playAbility();
+}
+
+function detonateDrone() {
+  if (!drone) return;
+  const finalPos = [drone.pos[0], drone.pos[1], drone.pos[2]];
+  const payload = {
+    type: 'drone', kind: 'detonate',
+    pos: finalPos, radius: drone.radius, damage: drone.damage,
+  };
+  net.sendAbility(payload);
+  if (host) host.handleAbility(net.selfId, payload);
+  spawnDroneExplosion(scene, finalPos, drone.radius);
+  removeDroneVisual(scene, net.selfId);
+  playExplosion();
+
+  // Restore agent view state based on current life status — if the pilot
+  // died mid-flight, applyLifeState will still keep them in fly-cam.
+  const meNow = client?.state.players[net?.selfId];
+  const alive = !!(meNow && meNow.alive && !meNow.spectator);
+  controller.canMove = true;
+  controller.pitch = drone.savedPitch ?? 0;
+  viewmodel.group.visible = alive;
+  drone = null;
+}
+
+function tickDrone(dt) {
+  if (!drone) return;
+  drone.t += dt;
+
+  // Auto-detonate on timeout, on phase change away from live, or on death.
+  const meNow = client?.state.players[net?.selfId];
+  if (drone.t >= drone.life
+      || client?.state.phase !== PHASE.ROUND_LIVE
+      || !meNow || !meNow.alive || meNow.spectator) {
+    detonateDrone();
+    return;
+  }
+
+  // WASD moves along camera yaw; ignore pitch so drone hugs the floor.
+  drone.yaw = controller.yaw;
+  const fx = -Math.sin(drone.yaw), fz = -Math.cos(drone.yaw);
+  const rx =  Math.cos(drone.yaw), rz = -Math.sin(drone.yaw);
+  let vx = 0, vz = 0;
+  if (controller.keys['KeyW']) { vx += fx; vz += fz; }
+  if (controller.keys['KeyS']) { vx -= fx; vz -= fz; }
+  if (controller.keys['KeyD']) { vx += rx; vz += rz; }
+  if (controller.keys['KeyA']) { vx -= rx; vz -= rz; }
+  const l = Math.hypot(vx, vz);
+  if (l > 0) { vx /= l; vz /= l; }
+  const nx = drone.pos[0] + vx * drone.speed * dt;
+  const nz = drone.pos[2] + vz * drone.speed * dt;
+  // Collide with walls. feetY=0 so it respects all permanent AABBs.
+  const r = resolveMovement(drone.pos[0], drone.pos[2], nx, nz, 0.28, 0);
+  drone.pos[0] = r.x;
+  drone.pos[2] = r.z;
+
+  updateDronePose(net.selfId, drone.pos, drone.yaw);
+
+  // Override camera to drone's eyepoint. Limited pitch = limited vision.
+  const limitedPitch = Math.max(-0.35, Math.min(0.35, controller.pitch));
+  camera.position.set(drone.pos[0], drone.pos[1] + 0.1, drone.pos[2]);
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = drone.yaw;
+  camera.rotation.x = limitedPitch;
+  camera.rotation.z = 0;
+
+  // Stream pose to other peers (~15Hz).
+  const now = performance.now();
+  if (now - lastDroneBroadcast > 66) {
+    lastDroneBroadcast = now;
+    net.sendAbility({ type: 'drone', kind: 'move', pos: drone.pos, yaw: drone.yaw });
+  }
+
+  // Drone-cam HUD timer
+  const timerEl = document.getElementById('droneTimer');
+  if (timerEl) timerEl.textContent = Math.max(0, drone.life - drone.t).toFixed(1);
+}
+
 function tryGrenade() {
+  if (drone) return; // can't throw while piloting — camera is on the drone
   const me = client?.state.players[net?.selfId];
   if (!me || !me.alive || me.spectator) return;
   if (client.state.phase !== PHASE.ROUND_LIVE) return;
@@ -792,17 +923,23 @@ function applyLifeState(phase) {
 
   // Transition alive→dead during a live round → enter fly-cam.
   if (wasAlive && !alive && phase === PHASE.ROUND_LIVE) {
-    controller.fly = true;
-    viewmodel.group.visible = false;
     // Small upward nudge so you don't clip into your own corpse.
     controller.pos.y = Math.max(controller.pos.y, 1.6);
   }
-  // Transition back to alive (e.g., new round BUY) → leave fly-cam.
-  if (!wasAlive && alive) {
-    controller.fly = false;
-    viewmodel.group.visible = true;
-  }
   wasAlive = alive;
+
+  // Idempotent reconcile — covers edge cases where code elsewhere (e.g. drone
+  // detonate on death) might have restored the viewmodel or movement flags.
+  if (!alive && phase === PHASE.ROUND_LIVE) {
+    controller.fly = true;
+    viewmodel.group.visible = false;
+  } else if (alive) {
+    // Only force controls on when not in drone mode (drone pilot freezes body).
+    if (!drone) {
+      controller.fly = false;
+      viewmodel.group.visible = true;
+    }
+  }
 
   // Death HUD — only during live gameplay phases where you'd be dead.
   const showDeath = !alive && !me?.spectator && me?.team && (phase === PHASE.ROUND_LIVE || phase === PHASE.ROUND_END);
@@ -896,6 +1033,11 @@ function loop() {
   updateBombMesh(scene, client?.state.bomb, dt);
   tickBombHold();
   updateBombHud();
+  tickDrone(dt);
+  updateDronesVfx(dt, scene);
+
+  const droneEl = document.getElementById('droneCam');
+  if (droneEl) droneEl.classList.toggle('hidden', !drone);
 
   // UI render
   if (client) {
@@ -966,6 +1108,8 @@ function onPhaseEnter(phase, prev) {
     setBarriersActive(true);     // attackers can't leave spawn yet
     clearAllSmokes();
     clearAllBarrierWalls(scene);
+    clearAllDrones(scene);
+    drone = null;
     hud.centerShow(`BUY PHASE · Round ${client.state.round} · press B to close shop`, 3000);
   }
   if (phase === PHASE.ROUND_LIVE) {
@@ -992,6 +1136,8 @@ function onPhaseEnter(phase, prev) {
     setBarriersActive(false);
     clearAllSmokes();
     clearAllBarrierWalls(scene);
+    clearAllDrones(scene);
+    drone = null;
     if (prev) {
       // returning from match-end: teleport back to lobby spawn and reset
       controller.teleport(LOBBY_SPAWN.x, LOBBY_SPAWN.z);

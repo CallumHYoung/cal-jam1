@@ -408,6 +408,34 @@ export class HostRuntime {
     if (s.phase !== PHASE.ROUND_LIVE) return;
     const p = s.players[id];
     if (!p || !p.alive || p.spectator) return;
+
+    // Tech's drone uses sub-kinds: 'spawn' consumes a charge, 'detonate'
+    // applies AoE damage, 'move' is a streamed pose update (no host logic).
+    if (payload?.type === 'drone') {
+      const kind = payload.kind;
+      if (kind === 'spawn') {
+        if (p.abilityCharges <= 0) return;
+        if (!Array.isArray(payload.pos)) return;
+        p.abilityCharges -= 1;
+        this.broadcast.event({ type: 'ability', from: id, kind: 'droneSpawn', pos: payload.pos });
+      } else if (kind === 'detonate' && Array.isArray(payload.pos)) {
+        // AoE damage is validated through the same grenade path — no
+        // line-of-sight requirement, small radius, only hurts enemies.
+        const pos = { x: payload.pos[0], y: payload.pos[1] ?? 0.4, z: payload.pos[2] };
+        this.handleGrenadeExplosion({
+          pos,
+          radius: Number(payload.radius) || 4.5,
+          dmg: Number(payload.damage) || 110,
+          ownerId: id,
+          type: 'drone',
+        });
+        this.broadcast.event({ type: 'ability', from: id, kind: 'droneDetonate', pos: payload.pos });
+      }
+      // 'move' is not authoritative — ignored by host; peers render it via
+      // their own net.onAbility subscription.
+      return;
+    }
+
     if (p.abilityCharges <= 0) return;
     const { type, pos, axis, width, height, duration } = payload || {};
     p.abilityCharges -= 1;

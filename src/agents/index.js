@@ -1,12 +1,14 @@
 import { DUELIST } from './duelist.js';
 import { CONTROLLER } from './controller.js';
 import { SENTINEL } from './sentinel.js';
+import { TECH } from './tech.js';
 
 // Registry. Drop new agents in adjacent files and register here.
 export const AGENTS = {
   [DUELIST.id]: DUELIST,
   [CONTROLLER.id]: CONTROLLER,
   [SENTINEL.id]: SENTINEL,
+  [TECH.id]: TECH,
 };
 
 export const DEFAULT_AGENT = DUELIST.id;
