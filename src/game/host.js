@@ -1,7 +1,7 @@
-import { PHASE, PHASE_DUR, MATCH, initialSnapshot } from './state.js';
+import { PHASE, PHASE_DUR, MATCH, BOMB, initialSnapshot, emptyBomb } from './state.js';
 import { defaultInventory, WEAPONS, ARMOR, GRENADES, computeDamage } from '../combat/weapons.js';
 import { applyDamage, fullHeal, applyArmor } from '../combat/health.js';
-import { SPAWNS, raycastWorld } from '../world/map.js';
+import { SPAWNS, raycastWorld, getBombSiteAt } from '../world/map.js';
 import { AGENTS, DEFAULT_AGENT } from '../agents/index.js';
 
 // The host authoritative runtime. Owns the match state, validates intents,
@@ -31,7 +31,10 @@ export class HostRuntime {
     }
 
     if (s.phase === PHASE.LOBBY) this._checkAutoStart(now);
-    if (s.phase === PHASE.ROUND_LIVE) this._checkRoundEnd(now);
+    if (s.phase === PHASE.ROUND_LIVE) {
+      this._tickBomb(now);
+      this._checkRoundEnd(now);
+    }
 
     // broadcast @ 10Hz
     if (now - this.lastSnapshot > 1000 / this.snapshotHz) {
@@ -79,6 +82,7 @@ export class HostRuntime {
       scoreB: s.scoreB,
       players: s.players,
       startCountdown: s.startCountdown || 0,
+      bomb: s.bomb,
     };
   }
 
@@ -188,6 +192,12 @@ export class HostRuntime {
         p.alive = true;
       }
       this._liveStartedAt = now;
+      // Assign the spike to one random alive attacker.
+      this._assignBombCarrier();
+    }
+
+    if (phase === PHASE.BUY) {
+      this.state.bomb = emptyBomb();
     }
 
     if (phase === PHASE.ROUND_END) {
@@ -214,8 +224,14 @@ export class HostRuntime {
     } else if (cur === PHASE.BUY) {
       this._enter(PHASE.ROUND_LIVE, now);
     } else if (cur === PHASE.ROUND_LIVE) {
-      // timer ran out with no wipe → defenders (team B, arbitrarily) win
-      this._resolveRound('B', now);
+      // Timer ran out: if the spike is planted, it detonates (attackers win);
+      // otherwise defenders hold the sites (defenders win).
+      if (this.state.bomb?.planted) {
+        this.broadcast.event({ type: 'bombDetonated', site: this.state.bomb.site });
+        this._resolveRound('B', now);
+      } else {
+        this._resolveRound('A', now);
+      }
     } else if (cur === PHASE.ROUND_END) {
       // next round or match end
       if (this.state.scoreA >= MATCH.ROUNDS_TO_WIN || this.state.scoreB >= MATCH.ROUNDS_TO_WIN) {
@@ -248,14 +264,17 @@ export class HostRuntime {
 
     const teamA = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'A');
     const teamB = Object.values(this.state.players).filter(p => !p.spectator && p.team === 'B');
-    // If a team has no members at all (e.g., everyone left), don't use that as a win condition.
     if (teamA.length === 0 || teamB.length === 0) return;
     const aliveA = teamA.filter(p => p.alive).length;
     const aliveB = teamB.filter(p => p.alive).length;
+    const planted = !!this.state.bomb?.planted;
 
-    if (aliveA === 0 && aliveB > 0) { this._logWipe('A', teamA, teamB); this._resolveRound('B', now); }
-    else if (aliveB === 0 && aliveA > 0) { this._logWipe('B', teamA, teamB); this._resolveRound('A', now); }
-    else if (aliveA === 0 && aliveB === 0) { this._logWipe('draw', teamA, teamB); this._resolveRound(null, now); }
+    // Once the spike is planted, attackers being wiped does NOT end the round —
+    // the bomb still needs to be defused or it detonates.
+    if (aliveA === 0 && aliveB === 0) { this._logWipe('draw', teamA, teamB); this._resolveRound(planted ? 'B' : null, now); }
+    else if (aliveA === 0 && aliveB > 0) { this._logWipe('A', teamA, teamB); this._resolveRound('B', now); }
+    else if (aliveB === 0 && aliveA > 0 && !planted) { this._logWipe('B', teamA, teamB); this._resolveRound('A', now); }
+    // else (bomb planted + attackers wiped): let defuse/detonate timer decide.
   }
 
   _logWipe(side, teamA, teamB) {
@@ -347,6 +366,7 @@ export class HostRuntime {
         type: 'kill',
         killer: fromId, victim: hitOwnerId, weapon: w, headshot: hitKind === 'head',
       });
+      this._onPlayerDied(hitOwnerId);
     }
   }
 
@@ -378,6 +398,7 @@ export class HostRuntime {
           attacker.money = Math.min(MATCH.MAX_MONEY, attacker.money + MATCH.KILL_BONUS);
         }
         this.broadcast.event({ type: 'kill', killer: ownerId, victim: id, weapon: 'frag', headshot: false });
+        this._onPlayerDied(id);
       }
     }
   }
@@ -409,4 +430,111 @@ export class HostRuntime {
 
   // Host must know about its own pose too, for grenade AoE. Set by main.js.
   setSelfPose(pose) { this._selfPose = pose; }
+
+  /* ---------- bomb / spike ---------- */
+
+  _getPose(id) {
+    if (id === this.selfId) return this._selfPose || null;
+    return this.getPeerPoses().get(id) || null;
+  }
+
+  _assignBombCarrier() {
+    this.state.bomb = emptyBomb();
+    const attackers = Object.entries(this.state.players)
+      .filter(([, p]) => !p.spectator && p.team === 'B' && p.alive)
+      .map(([id]) => id);
+    if (attackers.length === 0) return;
+    const pick = attackers[Math.floor(Math.random() * attackers.length)];
+    this.state.bomb.carrierId = pick;
+    this.broadcast.event({ type: 'bombAssigned', to: pick });
+  }
+
+  _dropBombAt(x, z) {
+    this.state.bomb.carrierId = null;
+    this.state.bomb.dropped = true;
+    this.state.bomb.pos = [x, z];
+    this.broadcast.event({ type: 'bombDropped', pos: [x, z] });
+  }
+
+  _tickBomb(now) {
+    const b = this.state.bomb;
+    if (!b) return;
+
+    // Detonation: attackers win the round.
+    if (b.planted && now >= b.detonateAt) {
+      this.broadcast.event({ type: 'bombDetonated', site: b.site, pos: b.pos });
+      this._resolveRound('B', now);
+      return;
+    }
+
+    // Pickup: any alive attacker touching a dropped spike becomes the carrier.
+    if (!b.planted && b.dropped && Array.isArray(b.pos)) {
+      const r2 = BOMB.PICKUP_RADIUS * BOMB.PICKUP_RADIUS;
+      for (const [id, p] of Object.entries(this.state.players)) {
+        if (!p.alive || p.spectator || p.team !== 'B') continue;
+        const pose = this._getPose(id);
+        if (!pose) continue;
+        const dx = pose.x - b.pos[0];
+        const dz = pose.z - b.pos[1];
+        if (dx*dx + dz*dz <= r2) {
+          b.carrierId = id;
+          b.dropped = false;
+          b.pos = null;
+          this.broadcast.event({ type: 'bombPickup', by: id });
+          break;
+        }
+      }
+    }
+  }
+
+  _onPlayerDied(id) {
+    const b = this.state.bomb;
+    if (!b || !b.carrierId || b.carrierId !== id) return;
+    const pose = this._getPose(id);
+    if (pose) this._dropBombAt(pose.x, pose.z);
+    else { b.carrierId = null; b.dropped = false; }
+  }
+
+  handleBomb(fromId, msg) {
+    const s = this.state;
+    if (s.phase !== PHASE.ROUND_LIVE) return;
+    const p = s.players[fromId];
+    if (!p || !p.alive || p.spectator) return;
+    const b = s.bomb;
+    if (!b) return;
+
+    if (msg?.kind === 'plant') {
+      if (b.planted) return;
+      if (b.carrierId !== fromId) return;
+      if (p.team !== 'B') return;
+      const x = Number(msg.x), z = Number(msg.z);
+      const pose = this._getPose(fromId);
+      // Validate planter is actually inside a site (server-authoritative).
+      const planterSite = pose ? getBombSiteAt(pose.x, pose.z) : null;
+      if (!planterSite) return;
+      b.planted = true;
+      b.plantedBy = fromId;
+      b.site = planterSite;
+      b.pos = pose ? [pose.x, pose.z] : [x, z];
+      b.plantedAt = Date.now();
+      b.detonateAt = b.plantedAt + BOMB.DETONATE_TIME * 1000;
+      b.carrierId = null;
+      b.dropped = false;
+      // Re-anchor the phase timer to the detonation deadline.
+      s.phaseEndsAt = b.detonateAt;
+      this.broadcast.event({
+        type: 'bombPlanted', site: b.site, pos: b.pos,
+        by: fromId, plantedAt: b.plantedAt, detonateAt: b.detonateAt,
+      });
+    } else if (msg?.kind === 'defuse') {
+      if (!b.planted) return;
+      if (p.team !== 'A') return;
+      const pose = this._getPose(fromId);
+      if (!pose || !Array.isArray(b.pos)) return;
+      const dx = pose.x - b.pos[0], dz = pose.z - b.pos[1];
+      if (dx*dx + dz*dz > BOMB.DEFUSE_RADIUS * BOMB.DEFUSE_RADIUS) return;
+      this.broadcast.event({ type: 'bombDefused', by: fromId });
+      this._resolveRound('A', Date.now());
+    }
+  }
 }

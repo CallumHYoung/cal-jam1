@@ -32,6 +32,17 @@
   <span id="phaseBannerTimer">20</span>
 </div>
 
+<!-- Bomb HUD: carrier indicator + planted banner + plant/defuse progress -->
+<div id="bombCarrierHud" class="hidden">YOU HAVE THE SPIKE · <span class="key">F</span> to plant in a site</div>
+<div id="bombPlantedHud" class="hidden">
+  <div id="bombPlantedLabel">SPIKE PLANTED · <span id="bombSiteLabel">A</span></div>
+  <div id="bombPlantedTimer">45</div>
+</div>
+<div id="bombProgress" class="hidden">
+  <div id="bombProgressLabel">PLANTING…</div>
+  <div id="bombProgressBar"><div id="bombProgressFill"></div></div>
+</div>
+
 <!-- In-world HUD (first person, round-live) -->
 <div id="hud" class="hidden">
   <div id="crosshair"><span></span><span></span><span></span><span></span></div>
@@ -42,6 +53,10 @@
       <div id="roundTimer">1:40</div>
     </div>
     <div id="scoreEnemy" class="score t-enemy">0</div>
+  </div>
+  <div id="bigTimerWrap" class="hidden">
+    <div id="bigTimerLabel">ROUND 1</div>
+    <div id="bigTimerClock">1:40</div>
   </div>
   <div id="killfeed"></div>
   <div id="hudBottomLeft">

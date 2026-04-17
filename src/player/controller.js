@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { resolveMovement } from '../world/map.js';
+import { resolveMovement, groundHeightAt } from '../world/map.js';
 
 // First-person controller. Owns: local player transform, camera, input.
 export class FPSController {
@@ -105,18 +105,25 @@ export class FPSController {
       // jump + gravity
       this.vel.y -= 22 * dt;
       if (this.onGround && this.keys['Space']) {
-        this.vel.y = 7.2;
+        this.vel.y = 8.4; // reach ~1.6m — step-on-able onto 1.5m crates
         this.onGround = false;
       }
 
       const newX = this.pos.x + this.vel.x * dt;
       const newZ = this.pos.z + this.vel.z * dt;
-      const r = resolveMovement(this.pos.x, this.pos.z, newX, newZ, 0.35);
+      const r = resolveMovement(this.pos.x, this.pos.z, newX, newZ, 0.35, this.pos.y);
       this.pos.x = r.x;
       this.pos.z = r.z;
 
       this.pos.y += this.vel.y * dt;
-      if (this.pos.y <= 0) { this.pos.y = 0; this.vel.y = 0; this.onGround = true; }
+      const g = groundHeightAt(this.pos.x, this.pos.z, this.pos.y, 0.35);
+      if (this.pos.y <= g + 0.001) {
+        this.pos.y = g;
+        if (this.vel.y < 0) this.vel.y = 0;
+        this.onGround = true;
+      } else {
+        this.onGround = false;
+      }
     }
 
     // update camera

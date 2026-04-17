@@ -9,6 +9,10 @@ export class HUD {
     this.scoreEnemy = document.getElementById('scoreEnemy');
     this.roundNum = document.getElementById('roundNum');
     this.roundTimer = document.getElementById('roundTimer');
+    this.hudTop = document.getElementById('hudTop');
+    this.bigTimerWrap = document.getElementById('bigTimerWrap');
+    this.bigTimerLabel = document.getElementById('bigTimerLabel');
+    this.bigTimerClock = document.getElementById('bigTimerClock');
     this.hpVal = document.getElementById('hpVal');
     this.armorVal = document.getElementById('armorVal');
     this.moneyVal = document.getElementById('moneyVal');
@@ -40,9 +44,16 @@ export class HUD {
     if (performance.now() - this._hitT > 180) this.hitMarker.style.opacity = '0';
   }
 
-  render({ phase, round, scoreA, scoreB, remainingSec, me, ammo, team, events }) {
+  render({ phase, round, scoreA, scoreB, remainingSec, me, ammo, team, events, bomb }) {
     const showHud = (phase === PHASE.ROUND_LIVE || phase === PHASE.BUY || phase === PHASE.ROUND_END);
     this.root.classList.toggle('hidden', !showHud || !me);
+
+    // Big center timer: visible during buy + live. Bomb timer takes over when planted.
+    const showBig = (phase === PHASE.BUY || phase === PHASE.ROUND_LIVE) && !!me;
+    const planted = !!(bomb && bomb.planted);
+    this.bigTimerWrap.classList.toggle('hidden', !showBig || planted);
+    this.hudTop?.classList.toggle('bigTimer', showBig && !planted);
+
     if (!me) return;
 
     // scores (own team first)
@@ -54,6 +65,14 @@ export class HUD {
     const m = Math.floor(remainingSec / 60);
     const s = Math.floor(remainingSec % 60);
     this.roundTimer.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+
+    if (showBig) {
+      const label = phase === PHASE.BUY ? 'BUY PHASE' : `ROUND ${round || 1}`;
+      this.bigTimerLabel.textContent = label;
+      this.bigTimerClock.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+      this.bigTimerWrap.classList.toggle('urgent', phase === PHASE.ROUND_LIVE && remainingSec <= 10);
+      this.bigTimerWrap.classList.toggle('low', phase === PHASE.ROUND_LIVE && remainingSec > 10 && remainingSec <= 30);
+    }
 
     this.hpVal.textContent = me.hp;
     this.armorVal.textContent = me.armor;

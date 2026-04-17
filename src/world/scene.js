@@ -9,7 +9,7 @@ export function createScene() {
   renderer.shadowMap.enabled = false;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x05050a, 30, 80);
+  scene.fog = new THREE.Fog(0x05050a, 40, 150);
 
   const camera = new THREE.PerspectiveCamera(
     78,

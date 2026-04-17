@@ -16,6 +16,15 @@ export const PHASE_DUR = {
   [PHASE.MATCH_END]:    10,
 };
 
+// Bomb/spike constants
+export const BOMB = {
+  PLANT_TIME: 3.5,      // seconds to plant (attacker holds USE in site)
+  DEFUSE_TIME: 7,       // seconds to defuse (defender holds USE next to bomb)
+  DETONATE_TIME: 45,    // seconds after plant until detonation
+  DEFUSE_RADIUS: 2.5,   // defender must be within this of bomb.pos
+  PICKUP_RADIUS: 1.8,   // attacker touches dropped bomb to pick up
+};
+
 export const MATCH = {
   ROUNDS_TO_WIN: 5,
   START_MONEY:   800,
@@ -35,6 +44,20 @@ export function initialSnapshot() {
     players: {},       // id → { name, color, team, agent, hp, armor, armorType, money, alive, weaponCurrent, inventory, abilityCharges, abilityActive, ready }
     events: [],        // small rolling buffer for killfeed (last ~10)
     startCountdown: 0, // seconds until auto-start (lobby only)
+    bomb: emptyBomb(),
+  };
+}
+
+export function emptyBomb() {
+  return {
+    carrierId: null,   // attacker currently holding the spike (null if dropped/planted)
+    dropped: false,    // true when lying on ground waiting for pickup
+    planted: false,
+    plantedBy: null,
+    site: null,        // 'A' | 'B' | null
+    pos: null,         // [x, z] world coords when dropped/planted
+    plantedAt: 0,      // ms epoch
+    detonateAt: 0,     // ms epoch — phase timer flips to this once planted
   };
 }
 

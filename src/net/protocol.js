@@ -15,5 +15,6 @@ export const CH = {
   BUY:     'buy',     // {item} — to host
   STATE:   'state',   // host → all, 10Hz authoritative snapshot
   EVENT:   'event',   // one-shot: {type, ...} — host → all
+  BOMB:    'bomb',    // {kind:'plant'|'defuse', x, z} — to host
   CHAT:    'chat',    // {msg}
 };

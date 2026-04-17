@@ -1,142 +1,201 @@
 import * as THREE from 'three';
 
-const WALL_H = 3.0;
+const WALL_H = 3.2;
+// Walkable top height — boxes up to this are stand-on-able / jump-on-able.
+// Anything taller is a full wall.
+const WALKABLE_TOP = 2.9;
 
-// 100x100 axis-aligned map. North (-z) = defender, south (+z) = attacker.
-// Mid divider at z=0 with five openings (A-lane, A-short, mid, B-short, B-lane)
-// so there are multiple rotations and flanks every round.
+// ============================================================================
+// 140x140 tactical map with two bomb sites (A west, B east).
+// North (-z) = defenders. South (+z) = attackers.
+// Designed for: big corners, long sightlines broken by chokepoints, two-tier
+// verticality (low crates 1.2m + tall "heaven" boxes 2.4m beside stair crates).
+// ============================================================================
 export const WALLS = [
-  // --- outer boundary (100x100) ---
-  { x: 0, z: -50, w: 100, d: 0.6 },
-  { x: 0, z: 50, w: 100, d: 0.6 },
-  { x: -50, z: 0, w: 0.6, d: 100 },
-  { x: 50, z: 0, w: 0.6, d: 100 },
+  // -------- outer boundary (140x140) --------
+  { x: 0,   z: -70, w: 140, d: 0.6 },
+  { x: 0,   z:  70, w: 140, d: 0.6 },
+  { x: -70, z: 0,   w: 0.6, d: 140 },
+  { x:  70, z: 0,   w: 0.6, d: 140 },
 
-  // --- defender spawn bunker (north) ---
-  // bunker: z=-48..-36, x=-16..+16, exit opening at z=-36 centered
-  { x: -16, z: -42, w: 0.6, d: 12 },
-  { x:  16, z: -42, w: 0.6, d: 12 },
-  { x: -28, z: -36, w: 24, d: 0.6 }, // x=-40..-16
-  { x:  28, z: -36, w: 24, d: 0.6 }, // x=+16..+40
+  // -------- defender spawn bunker (north: z=-68..-52, x=-22..+22) --------
+  { x: -22, z: -60, w: 0.6, d: 16 },
+  { x:  22, z: -60, w: 0.6, d: 16 },
+  { x: -14, z: -52, w: 16,  d: 0.6 }, // x=-22..-6
+  { x:  14, z: -52, w: 16,  d: 0.6 }, // x=+6..+22
 
-  // --- attacker spawn bunker (south) ---
-  { x: -16, z: 42, w: 0.6, d: 12 },
-  { x:  16, z: 42, w: 0.6, d: 12 },
-  { x: -28, z: 36, w: 24, d: 0.6 },
-  { x:  28, z: 36, w: 24, d: 0.6 },
+  // -------- attacker spawn bunker (south) --------
+  { x: -22, z:  60, w: 0.6, d: 16 },
+  { x:  22, z:  60, w: 0.6, d: 16 },
+  { x: -14, z:  52, w: 16,  d: 0.6 },
+  { x:  14, z:  52, w: 16,  d: 0.6 },
 
-  // --- mid divider (z=0) with 5 openings ---
-  // openings: x=-46..-42 (A long), x=-32..-28 (A short), x=-4..+4 (mid),
-  //           x=+28..+32 (B short), x=+42..+46 (B long)
-  { x: -48, z: 0, w: 4,  d: 0.6 },  // -50..-46
-  { x: -37, z: 0, w: 10, d: 0.6 },  // -42..-32
-  { x: -16, z: 0, w: 24, d: 0.6 },  // -28..-4
-  { x:  16, z: 0, w: 24, d: 0.6 },  // +4..+28
-  { x:  37, z: 0, w: 10, d: 0.6 },  // +32..+42
-  { x:  48, z: 0, w: 4,  d: 0.6 },  // +46..+50
+  // ========== A-SITE (west) — room x=-70..-42, z=-16..+6 ==========
+  // East wall with TWO entries: A-main (z=-10..-6) and A-cross (z=0..+4)
+  { x: -42, z: -13,  w: 0.6, d: 6 },   // z=-16..-10
+  { x: -42, z: -3,   w: 0.6, d: 6 },   // z=-6..0
+  { x: -42, z:  5,   w: 0.6, d: 2 },   // z=+4..+6
+  // North wall of A-site (z=-16, x=-70..-42)
+  { x: -56, z: -16, w: 28, d: 0.6 },
+  // South wall of A-site (z=+6)
+  { x: -56, z:   6, w: 28, d: 0.6 },
 
-  // --- A-site (west) — room around x=-40, z=0 with entrances ---
-  { x: -42, z: -10, w: 16, d: 0.6 }, // top wall x=-50..-34
-  { x: -42, z:  10, w: 16, d: 0.6 }, // bottom wall
-  { x: -34, z:  -6, w: 0.6, d: 3 },  // side doorframe
-  { x: -34, z:   6, w: 0.6, d: 3 },
+  // A-site cover (plant zones + heaven)
+  { x: -54, z: -6, w: 3.5, d: 3.5, h: 1.5 },   // central crate stack base
+  { x: -58, z: -6, w: 2,   d: 2,   h: 2.6 },   // heaven box behind (step up from base)
+  { x: -48, z: -10, w: 2, d: 2, h: 1.2 },      // plant-corner NE
+  { x: -48, z:  0,  w: 2, d: 2, h: 1.2 },      // plant-corner SE
+  { x: -62, z:  1,  w: 2, d: 2, h: 1.4 },      // deep corner cover
+  { x: -50, z: -13, w: 1.5, d: 1.5, h: 1.4 },  // default-ish spot
+  { x: -65, z: -10, w: 2, d: 2, h: 1.5 },      // back-site elevated
 
-  // --- B-site (east) — mirror ---
-  { x:  42, z: -10, w: 16, d: 0.6 },
-  { x:  42, z:  10, w: 16, d: 0.6 },
-  { x:  34, z:  -6, w: 0.6, d: 3 },
-  { x:  34, z:   6, w: 0.6, d: 3 },
+  // ========== B-SITE (east) — mirror ==========
+  { x:  42, z: -13,  w: 0.6, d: 6 },
+  { x:  42, z: -3,   w: 0.6, d: 6 },
+  { x:  42, z:  5,   w: 0.6, d: 2 },
+  { x:  56, z: -16, w: 28, d: 0.6 },
+  { x:  56, z:   6, w: 28, d: 0.6 },
+  { x:  54, z: -6, w: 3.5, d: 3.5, h: 1.5 },
+  { x:  58, z: -6, w: 2,   d: 2,   h: 2.6 },
+  { x:  48, z: -10, w: 2, d: 2, h: 1.2 },
+  { x:  48, z:  0,  w: 2, d: 2, h: 1.2 },
+  { x:  62, z:  1,  w: 2, d: 2, h: 1.4 },
+  { x:  50, z: -13, w: 1.5, d: 1.5, h: 1.4 },
+  { x:  65, z: -10, w: 2, d: 2, h: 1.5 },
 
-  // --- A-long corner pieces (west lane x=-45..-42 running z=-35..+35) ---
-  { x: -42, z: -22, w: 0.6, d: 6 },
-  { x: -42, z:  22, w: 0.6, d: 6 },
-  { x: -38, z: -28, w: 4, d: 0.6 },
-  { x: -38, z:  28, w: 4, d: 0.6 },
+  // ========== MID — big central obstacle + chokepoint walls ==========
+  // Mid chokepoint walls north side (z=-20) — open gap x=-4..+4
+  { x: -15, z: -20, w: 22, d: 0.6 },   // x=-26..-4
+  { x:  15, z: -20, w: 22, d: 0.6 },   // x=+4..+26
+  // Mid chokepoint walls south side (z=+20) — open gap x=-4..+4
+  { x: -15, z:  20, w: 22, d: 0.6 },
+  { x:  15, z:  20, w: 22, d: 0.6 },
 
-  // --- B-long corner pieces (mirror) ---
-  { x:  42, z: -22, w: 0.6, d: 6 },
-  { x:  42, z:  22, w: 0.6, d: 6 },
-  { x:  38, z: -28, w: 4, d: 0.6 },
-  { x:  38, z:  28, w: 4, d: 0.6 },
+  // Central mega-obstacle — big cube you must route around (blocks direct sightline)
+  { x: 0, z: 0, w: 8, d: 8, h: 3.2 },    // solid mid tower
+  // Step boxes letting someone hop up onto adjacent cover (not the tower itself)
+  { x: -7, z: -7, w: 2, d: 2, h: 1.3 },
+  { x:  7, z:  7, w: 2, d: 2, h: 1.3 },
+  { x: -7, z:  7, w: 2, d: 2, h: 1.3 },
+  { x:  7, z: -7, w: 2, d: 2, h: 1.3 },
+  // Mid close-cover pieces
+  { x: -12, z:  0, w: 1.5, d: 4, h: 1.4 },
+  { x:  12, z:  0, w: 1.5, d: 4, h: 1.4 },
 
-  // --- A-short connector walls (between mid and A-site) ---
-  { x: -22, z: -10, w: 0.6, d: 6 },
-  { x: -22, z:  10, w: 0.6, d: 6 },
-  // --- B-short connector (mirror) ---
-  { x:  22, z: -10, w: 0.6, d: 6 },
-  { x:  22, z:  10, w: 0.6, d: 6 },
+  // ========== A-SHORT lane (cuts from mid to A-site entrance at x=-42,z=-8) ==========
+  // Wall running north (z=-36..-24) at x=-30 blocks defender rotation
+  { x: -30, z: -30, w: 0.6, d: 12 },
+  // Southern half
+  { x: -30, z:  30, w: 0.6, d: 12 },
+  // Stubs
+  { x: -30, z: -18, w: 0.6, d: 4 },    // z=-20..-16
+  { x: -30, z:  18, w: 0.6, d: 4 },
 
-  // --- mid room cover ---
-  { x:  0, z: -10, w: 4, d: 0.6 },
-  { x:  0, z:  10, w: 4, d: 0.6 },
-  { x: -6, z: -5, w: 2, d: 2, h: 1.4 },
-  { x:  6, z:  5, w: 2, d: 2, h: 1.4 },
+  // A-short cover (forces peek & counter-peek)
+  { x: -36, z: -12, w: 2, d: 2, h: 1.5 },   // corner on A-main entry
+  { x: -36, z:   2, w: 2, d: 2, h: 1.5 },
+  { x: -26, z: -10, w: 2, d: 2, h: 1.4 },
+  { x: -26, z:   8, w: 2, d: 2, h: 1.4 },
 
-  // --- A-site cover ---
-  { x: -38, z: -2, w: 2,   d: 2,   h: 1.3 },
-  { x: -38, z:  2, w: 2,   d: 2,   h: 1.3 },
-  { x: -45, z:  0, w: 2,   d: 2,   h: 1.3 },
-  { x: -36, z: -6, w: 1.4, d: 1.4, h: 1.2 },
-  { x: -36, z:  6, w: 1.4, d: 1.4, h: 1.2 },
+  // ========== B-SHORT (mirror) ==========
+  { x:  30, z: -30, w: 0.6, d: 12 },
+  { x:  30, z:  30, w: 0.6, d: 12 },
+  { x:  30, z: -18, w: 0.6, d: 4 },
+  { x:  30, z:  18, w: 0.6, d: 4 },
+  { x:  36, z: -12, w: 2, d: 2, h: 1.5 },
+  { x:  36, z:   2, w: 2, d: 2, h: 1.5 },
+  { x:  26, z: -10, w: 2, d: 2, h: 1.4 },
+  { x:  26, z:   8, w: 2, d: 2, h: 1.4 },
 
-  // --- B-site cover (mirror) ---
-  { x:  38, z: -2, w: 2,   d: 2,   h: 1.3 },
-  { x:  38, z:  2, w: 2,   d: 2,   h: 1.3 },
-  { x:  45, z:  0, w: 2,   d: 2,   h: 1.3 },
-  { x:  36, z: -6, w: 1.4, d: 1.4, h: 1.2 },
-  { x:  36, z:  6, w: 1.4, d: 1.4, h: 1.2 },
+  // ========== A-LONG lane (west corridor, x=-65..-42, running z=-45..+45) ==========
+  // Big L-corner walls create a snake route for attackers
+  // Attacker side (south) wall
+  { x: -55, z:  34, w: 10,  d: 0.6 },   // x=-60..-50, z=+34
+  { x: -50, z:  28, w: 0.6, d: 12 },    // z=+22..+34  (L corner)
+  // Defender side (north) wall (forces peekable angles into site)
+  { x: -55, z: -28, w: 10,  d: 0.6 },
+  { x: -50, z: -22, w: 0.6, d: 12 },
 
-  // --- hallway cover (A-long) ---
-  { x: -44, z: -15, w: 1.5, d: 1.5, h: 1.4 },
-  { x: -44, z:  15, w: 1.5, d: 1.5, h: 1.4 },
-  { x: -44, z: -30, w: 1.5, d: 1.5, h: 1.4 },
-  { x: -44, z:  30, w: 1.5, d: 1.5, h: 1.4 },
+  // A-long cover (verticality — stair + heaven)
+  { x: -62, z:  42, w: 3,   d: 3, h: 1.4 },    // stair box
+  { x: -58, z:  42, w: 2,   d: 2, h: 2.6 },    // heaven
+  { x: -48, z:  42, w: 2.5, d: 2.5, h: 1.4 },
+  { x: -60, z:  15, w: 3,   d: 3, h: 1.5 },    // mid-lane cover
+  { x: -48, z:  18, w: 2,   d: 2, h: 1.3 },
 
-  // --- hallway cover (B-long) ---
-  { x:  44, z: -15, w: 1.5, d: 1.5, h: 1.4 },
-  { x:  44, z:  15, w: 1.5, d: 1.5, h: 1.4 },
-  { x:  44, z: -30, w: 1.5, d: 1.5, h: 1.4 },
-  { x:  44, z:  30, w: 1.5, d: 1.5, h: 1.4 },
+  { x: -62, z: -42, w: 3,   d: 3, h: 1.4 },
+  { x: -58, z: -42, w: 2,   d: 2, h: 2.6 },
+  { x: -48, z: -42, w: 2.5, d: 2.5, h: 1.4 },
+  { x: -60, z: -15, w: 3,   d: 3, h: 1.5 },
 
-  // --- spawn exit cover (both sides) ---
-  { x: -8, z: -32, w: 2, d: 2, h: 1.4 },
-  { x:  8, z: -32, w: 2, d: 2, h: 1.4 },
-  { x: -8, z:  32, w: 2, d: 2, h: 1.4 },
-  { x:  8, z:  32, w: 2, d: 2, h: 1.4 },
+  // ========== B-LONG (mirror) ==========
+  { x:  55, z:  34, w: 10,  d: 0.6 },
+  { x:  50, z:  28, w: 0.6, d: 12 },
+  { x:  55, z: -28, w: 10,  d: 0.6 },
+  { x:  50, z: -22, w: 0.6, d: 12 },
+  { x:  62, z:  42, w: 3,   d: 3, h: 1.4 },
+  { x:  58, z:  42, w: 2,   d: 2, h: 2.6 },
+  { x:  48, z:  42, w: 2.5, d: 2.5, h: 1.4 },
+  { x:  60, z:  15, w: 3,   d: 3, h: 1.5 },
+  { x:  48, z:  18, w: 2,   d: 2, h: 1.3 },
+  { x:  62, z: -42, w: 3,   d: 3, h: 1.4 },
+  { x:  58, z: -42, w: 2,   d: 2, h: 2.6 },
+  { x:  48, z: -42, w: 2.5, d: 2.5, h: 1.4 },
+  { x:  60, z: -15, w: 3,   d: 3, h: 1.5 },
 
-  // --- mid corridor short cover (forces sharper peeks) ---
-  { x: -18, z: -14, w: 2, d: 2, h: 1.4 },
-  { x:  18, z: -14, w: 2, d: 2, h: 1.4 },
-  { x: -18, z:  14, w: 2, d: 2, h: 1.4 },
-  { x:  18, z:  14, w: 2, d: 2, h: 1.4 },
+  // ========== Spawn exit cover (stops pre-aim from bunker door) ==========
+  { x: -12, z: -46, w: 3, d: 2, h: 1.6 },
+  { x:  12, z: -46, w: 3, d: 2, h: 1.6 },
+  { x: -12, z:  46, w: 3, d: 2, h: 1.6 },
+  { x:  12, z:  46, w: 3, d: 2, h: 1.6 },
 
-  // --- extra corner posts (defender side) ---
-  { x: -28, z: -22, w: 0.6, d: 0.6, h: WALL_H },
-  { x:  28, z: -22, w: 0.6, d: 0.6, h: WALL_H },
-  { x: -28, z:  22, w: 0.6, d: 0.6, h: WALL_H },
-  { x:  28, z:  22, w: 0.6, d: 0.6, h: WALL_H },
+  // ========== Extra big corner pieces near chokepoint gaps (tighten peeks) ==========
+  { x: -4, z: -24, w: 1.6, d: 3, h: 1.8 },
+  { x:  4, z: -24, w: 1.6, d: 3, h: 1.8 },
+  { x: -4, z:  24, w: 1.6, d: 3, h: 1.8 },
+  { x:  4, z:  24, w: 1.6, d: 3, h: 1.8 },
+
+  // Posts near mid-lane to break line-of-sight
+  { x: -20, z: -28, w: 0.8, d: 0.8, h: WALL_H },
+  { x:  20, z: -28, w: 0.8, d: 0.8, h: WALL_H },
+  { x: -20, z:  28, w: 0.8, d: 0.8, h: WALL_H },
+  { x:  20, z:  28, w: 0.8, d: 0.8, h: WALL_H },
 ];
 
-// Full-width barrier across the attacker side — blocks anyone trying to leave
-// during buy/agent-select, even around the bunker edges.
+// Full-width barrier across the attacker side — blocks them leaving spawn
+// during buy/agent-select.
 export const ATTACKER_BARRIERS = [
-  { x: 0, z: 30, w: 100, d: 0.6, h: 3 },
+  { x: 0, z: 50, w: 140, d: 0.6, h: 3 },
 ];
+
+// Bomb sites — circular zones. The spike can be planted anywhere inside.
+export const BOMB_SITES = [
+  { id: 'A', x: -55, z: -5, r: 6.5 },
+  { id: 'B', x:  55, z: -5, r: 6.5 },
+];
+
+export function getBombSiteAt(x, z) {
+  for (const s of BOMB_SITES) {
+    const dx = x - s.x, dz = z - s.z;
+    if (dx * dx + dz * dz <= s.r * s.r) return s.id;
+  }
+  return null;
+}
 
 export const SPAWNS = {
   teamA: [ // north, defenders
-    { x: -6, z: -44 }, { x: -3, z: -44 }, { x: 0, z: -44 }, { x: 3, z: -44 }, { x: 6, z: -44 },
+    { x: -8, z: -62 }, { x: -4, z: -62 }, { x: 0, z: -62 }, { x: 4, z: -62 }, { x: 8, z: -62 },
   ],
   teamB: [ // south, attackers
-    { x: -6, z: 44 }, { x: -3, z: 44 }, { x: 0, z: 44 }, { x: 3, z: 44 }, { x: 6, z: 44 },
+    { x: -8, z: 62 }, { x: -4, z: 62 }, { x: 0, z: 62 }, { x: 4, z: 62 }, { x: 8, z: 62 },
   ],
 };
 
-export const LOBBY_SPAWN = { x: 0, z: -20 };
+export const LOBBY_SPAWN = { x: 0, z: -35 };
 
 export const TEAM_PADS = [
-  { team: 'A', x: -12, z: -20, r: 3.5, color: 0x4aa3ff, label: 'ALPHA (defend)' },
-  { team: 'B', x:  12, z: -20, r: 3.5, color: 0xff4d6a, label: 'BRAVO (attack)' },
+  { team: 'A', x: -14, z: -35, r: 3.5, color: 0x4aa3ff, label: 'ALPHA (defend)' },
+  { team: 'B', x:  14, z: -35, r: 3.5, color: 0xff4d6a, label: 'BRAVO (attack)' },
 ];
 
 export function getTeamPadAt(x, z) {
@@ -188,26 +247,26 @@ export function buildMap(scene) {
   const floorMat = new THREE.MeshStandardMaterial({
     color: 0x1c1226, roughness: 0.85, metalness: 0.05,
   });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(220, 220), floorMat);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), floorMat);
   floor.rotation.x = -Math.PI / 2;
   scene.add(floor);
 
-  const grid = new THREE.GridHelper(220, 110, 0x4a2d78, 0x2a1646);
+  const grid = new THREE.GridHelper(300, 150, 0x4a2d78, 0x2a1646);
   grid.position.y = 0.01;
   scene.add(grid);
 
   // team-side accent flooring
   const accentA = new THREE.Mesh(
-    new THREE.PlaneGeometry(100, 3),
+    new THREE.PlaneGeometry(140, 4),
     new THREE.MeshBasicMaterial({ color: 0x2b6cff, transparent: true, opacity: 0.28 })
   );
   accentA.rotation.x = -Math.PI / 2;
-  accentA.position.set(0, 0.02, -47);
+  accentA.position.set(0, 0.02, -64);
   scene.add(accentA);
   const accentB = accentA.clone();
   accentB.material = accentA.material.clone();
   accentB.material.color.setHex(0xff4d6a);
-  accentB.position.z = 47;
+  accentB.position.z = 64;
   scene.add(accentB);
 
   const wallMat = new THREE.MeshStandardMaterial({
@@ -216,6 +275,10 @@ export function buildMap(scene) {
   const crateMat = new THREE.MeshStandardMaterial({
     color: 0x4a3566, roughness: 0.75, metalness: 0.2,
   });
+  const heavenMat = new THREE.MeshStandardMaterial({
+    color: 0x6b4aa0, roughness: 0.55, metalness: 0.35,
+    emissive: 0x2a1448, emissiveIntensity: 0.25,
+  });
   const postMat = new THREE.MeshStandardMaterial({
     color: 0x6a4d90, roughness: 0.6, metalness: 0.4,
   });
@@ -223,9 +286,11 @@ export function buildMap(scene) {
   for (const w of WALLS) {
     const h = w.h ?? WALL_H;
     const geo = new THREE.BoxGeometry(w.w, h, w.d);
-    const isCrate = (w.w <= 2.5 && w.d <= 2.5 && h < WALL_H);
-    const isPost = (w.w <= 1 && w.d <= 1);
-    const mesh = new THREE.Mesh(geo, isCrate ? crateMat : (isPost ? postMat : wallMat));
+    const isCrate = (w.w <= 3.5 && w.d <= 3.5 && h <= 1.8);
+    const isHeaven = (w.w <= 3.5 && w.d <= 3.5 && h > 1.8 && h <= WALKABLE_TOP);
+    const isPost = (w.w <= 1 && w.d <= 1 && h > WALKABLE_TOP);
+    const mat = isCrate ? crateMat : (isHeaven ? heavenMat : (isPost ? postMat : wallMat));
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.position.set(w.x, h / 2, w.z);
     scene.add(mesh);
 
@@ -292,23 +357,53 @@ export function buildMap(scene) {
     });
   }
 
-  // site markers
+  // site markers (visual only — BOMB_SITES is authoritative)
   const siteMat = new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.18 });
-  const siteA = new THREE.Mesh(new THREE.CircleGeometry(4, 32), siteMat);
-  siteA.rotation.x = -Math.PI / 2;
-  siteA.position.set(-40, 0.03, 0);
-  scene.add(siteA);
-  const siteB = siteA.clone();
-  siteB.position.set(40, 0.03, 0);
-  scene.add(siteB);
+  const siteRingMat = new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.7 });
+  const siteMeshes = {};
+  for (const s of BOMB_SITES) {
+    const disk = new THREE.Mesh(new THREE.CircleGeometry(s.r, 48), siteMat);
+    disk.rotation.x = -Math.PI / 2;
+    disk.position.set(s.x, 0.03, s.z);
+    scene.add(disk);
+
+    const ring = new THREE.Mesh(new THREE.RingGeometry(s.r - 0.1, s.r, 64), siteRingMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(s.x, 0.04, s.z);
+    scene.add(ring);
+
+    // letter marker floating above the site
+    const letterCanvas = document.createElement('canvas');
+    letterCanvas.width = 128; letterCanvas.height = 128;
+    const lctx = letterCanvas.getContext('2d');
+    lctx.fillStyle = 'rgba(0,0,0,0)';
+    lctx.fillRect(0, 0, 128, 128);
+    lctx.fillStyle = '#ffcc33';
+    lctx.font = 'bold 110px sans-serif';
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle';
+    lctx.fillText(s.id, 64, 72);
+    const tex = new THREE.CanvasTexture(letterCanvas);
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+    spr.position.set(s.x, 3.5, s.z);
+    spr.scale.set(3, 3, 1);
+    scene.add(spr);
+    siteMeshes[s.id] = { disk, ring, letter: spr };
+  }
 
   rebuildAABBs();
-  return { siteA, siteB };
+  return { sites: siteMeshes };
 }
 
-export function resolveMovement(prevX, prevZ, newX, newZ, radius = 0.35) {
+// ---- collision & raycast ----------------------------------------------------
+
+// Resolve a 2D XZ move, considering only AABBs that are NOT already below the
+// player's feet (so we can walk across the top of low boxes without getting
+// pushed sideways by them).
+export function resolveMovement(prevX, prevZ, newX, newZ, radius = 0.35, feetY = 0) {
   let x = newX, z = newZ;
   for (const a of WORLD_AABBS) {
+    // Skip boxes we're standing on/above.
+    if (feetY >= a.maxY - 0.05) continue;
     const cx = Math.max(a.minX, Math.min(x, a.maxX));
     const cz = Math.max(a.minZ, Math.min(z, a.maxZ));
     const dx = x - cx, dz = z - cz;
@@ -322,6 +417,20 @@ export function resolveMovement(prevX, prevZ, newX, newZ, radius = 0.35) {
     }
   }
   return { x, z };
+}
+
+// Return the height of the highest walkable AABB at (x, z) whose top is at
+// or below feetY + tolerance. Always 0 when standing on the world floor.
+export function groundHeightAt(x, z, feetY, radius = 0.3) {
+  let g = 0;
+  for (const a of WORLD_AABBS) {
+    if (a.maxY > WALKABLE_TOP) continue;        // ignore full walls
+    if (a.maxY > feetY + 0.25) continue;        // surface is above us — can't stand on yet
+    if (x < a.minX - radius || x > a.maxX + radius) continue;
+    if (z < a.minZ - radius || z > a.maxZ + radius) continue;
+    if (a.maxY > g) g = a.maxY;
+  }
+  return g;
 }
 
 export function raycastWorld(origin, dir, maxDist = 400) {

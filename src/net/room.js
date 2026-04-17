@@ -67,6 +67,7 @@ export async function connectRoom() {
     sendBuy:     (d, target) => actions.BUY.send(d, target),
     sendState:   (d, target) => actions.STATE.send(d, target),
     sendEvent:   (d, target) => actions.EVENT.send(d, target),
+    sendBomb:    (d, target) => actions.BOMB.send(d, target),
     sendChat:    (d, target) => actions.CHAT.send(d, target),
 
     onPres:    (cb) => actions.PRES.on(cb),
@@ -77,6 +78,7 @@ export async function connectRoom() {
     onBuy:     (cb) => actions.BUY.on(cb),
     onState:   (cb) => actions.STATE.on(cb),
     onEvent:   (cb) => actions.EVENT.on(cb),
+    onBomb:    (cb) => actions.BOMB.on(cb),
     onChat:    (cb) => actions.CHAT.on(cb),
 
     onPeerJoin: (cb) => room.onPeerJoin(cb),

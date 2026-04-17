@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createScene, triggerFlash, triggerDamageVignette } from './world/scene.js';
-import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive, raycastWorld } from './world/map.js';
+import { buildMap, LOBBY_SPAWN, SPAWNS, getTeamPadAt, setBarriersActive, raycastWorld, getBombSiteAt } from './world/map.js';
 import {
   unlockAudio, playGunshot, playHitMarker, playReload, playBuy,
   playExplosion, playRoundWin, playRoundLose, playDeath, playAbility,
@@ -13,10 +13,11 @@ import { fireTracer, spawnImpactDecal, updateBulletsVfx, raycastHit } from './co
 import { throwGrenade, updateGrenades } from './combat/grenades.js';
 import { spawnSmoke, updateSmokes, clearAllSmokes } from './combat/smoke.js';
 import { spawnBarrierWall, updateBarrierWalls, clearAllBarrierWalls } from './combat/walls.js';
+import { updateBombMesh } from './combat/bomb.js';
 import { connectRoom } from './net/room.js';
 import { HostRuntime } from './game/host.js';
 import { ClientRuntime } from './game/client.js';
-import { PHASE } from './game/state.js';
+import { PHASE, BOMB } from './game/state.js';
 import { LobbyUI } from './ui/lobby.js';
 import { AgentSelectUI } from './ui/agentSelect.js';
 import { BuyMenuUI } from './ui/buyMenu.js';
@@ -159,6 +160,10 @@ let client = null;     // ClientRuntime
     if (host) host.handleBuy(fromId, d.item);
   });
 
+  net.onBomb((d, fromId) => {
+    if (host) host.handleBomb(fromId, d);
+  });
+
   net.onState((s) => {
     client.applySnapshot(s);
     // host ignores incoming state; others adopt it
@@ -278,6 +283,9 @@ let scoped = false;     // aiming + weapon supports scope
 const BASE_FOV = 78;
 const SCOPE_FOV = 22;
 
+// Bomb plant/defuse hold state (local; completion sends an intent to host).
+let bombHold = null; // { kind: 'plant'|'defuse', startT, pos: {x,z}, sent }
+
 function setAim(on) {
   aiming = !!on;
 }
@@ -351,9 +359,14 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyE') tryAbility();
   if (e.code === 'KeyG') tryGrenade();
+  if (e.code === 'KeyF' && !e.repeat) tryBombHoldStart();
   if (e.code === 'Digit1') switchWeapon('primary');
   if (e.code === 'Digit2') switchWeapon('secondary');
 });
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyF') cancelBombHold();
+});
+window.addEventListener('blur', () => cancelBombHold());
 
 function switchWeapon(slot) {
   const me = client?.state.players[net?.selfId];
@@ -523,6 +536,111 @@ function tryAbility() {
   }
 }
 
+function tryBombHoldStart() {
+  if (!net || !client) return;
+  const me = client.state.players[net.selfId];
+  if (!me || !me.alive || me.spectator) return;
+  if (client.state.phase !== PHASE.ROUND_LIVE) return;
+  const b = client.state.bomb;
+  if (!b) return;
+
+  if (me.team === 'B' && b.carrierId === net.selfId && !b.planted) {
+    // Plant: must be inside a site zone.
+    const site = getBombSiteAt(controller.pos.x, controller.pos.z);
+    if (!site) { hud.centerShow('MOVE TO SITE A OR B TO PLANT', 1400); return; }
+    bombHold = { kind: 'plant', startT: performance.now(), pos: { x: controller.pos.x, z: controller.pos.z }, sent: false };
+    return;
+  }
+  if (me.team === 'A' && b.planted && Array.isArray(b.pos)) {
+    const dx = controller.pos.x - b.pos[0], dz = controller.pos.z - b.pos[1];
+    if (dx*dx + dz*dz > BOMB.DEFUSE_RADIUS * BOMB.DEFUSE_RADIUS) {
+      hud.centerShow('GET CLOSER TO THE SPIKE', 1400);
+      return;
+    }
+    bombHold = { kind: 'defuse', startT: performance.now(), pos: { x: controller.pos.x, z: controller.pos.z }, sent: false };
+  }
+}
+
+function cancelBombHold() {
+  if (bombHold && !bombHold.sent) {
+    const el = document.getElementById('bombProgress');
+    if (el) el.classList.add('hidden');
+  }
+  bombHold = null;
+}
+
+function tickBombHold() {
+  const el = document.getElementById('bombProgress');
+  if (!bombHold) { if (el) el.classList.add('hidden'); return; }
+  const me = client?.state.players[net?.selfId];
+  if (!me || !me.alive || client?.state.phase !== PHASE.ROUND_LIVE) { cancelBombHold(); return; }
+
+  // Cancel if the player strays too far from the start spot.
+  const dx = controller.pos.x - bombHold.pos.x;
+  const dz = controller.pos.z - bombHold.pos.z;
+  if (dx*dx + dz*dz > 0.35 * 0.35) { cancelBombHold(); return; }
+
+  const b = client.state.bomb;
+  if (bombHold.kind === 'plant') {
+    // Still carrier, still in a site, bomb still not planted.
+    if (b?.planted || b?.carrierId !== net.selfId || !getBombSiteAt(controller.pos.x, controller.pos.z)) {
+      cancelBombHold();
+      return;
+    }
+  } else if (bombHold.kind === 'defuse') {
+    if (!b?.planted || !Array.isArray(b.pos)) { cancelBombHold(); return; }
+    const bx = controller.pos.x - b.pos[0], bz = controller.pos.z - b.pos[1];
+    if (bx*bx + bz*bz > BOMB.DEFUSE_RADIUS * BOMB.DEFUSE_RADIUS) { cancelBombHold(); return; }
+  }
+
+  const dur = bombHold.kind === 'plant' ? BOMB.PLANT_TIME : BOMB.DEFUSE_TIME;
+  const elapsed = (performance.now() - bombHold.startT) / 1000;
+  const t = Math.min(1, elapsed / dur);
+
+  if (el) {
+    el.classList.remove('hidden');
+    el.classList.toggle('defuse', bombHold.kind === 'defuse');
+    document.getElementById('bombProgressLabel').textContent =
+      bombHold.kind === 'plant' ? 'PLANTING SPIKE…' : 'DEFUSING SPIKE…';
+    document.getElementById('bombProgressFill').style.width = `${(t * 100).toFixed(0)}%`;
+  }
+
+  if (t >= 1 && !bombHold.sent) {
+    bombHold.sent = true;
+    const payload = bombHold.kind === 'plant'
+      ? { kind: 'plant', x: controller.pos.x, z: controller.pos.z }
+      : { kind: 'defuse' };
+    net.sendBomb(payload);
+    if (host) host.handleBomb(net.selfId, payload);
+    bombHold = null;
+    if (el) el.classList.add('hidden');
+  }
+}
+
+function updateBombHud() {
+  if (!client || !net) return;
+  const me = client.state.players[net.selfId];
+  const s = client.state;
+  const b = s.bomb;
+  const live = (s.phase === PHASE.ROUND_LIVE);
+
+  const carrierEl = document.getElementById('bombCarrierHud');
+  const plantedEl = document.getElementById('bombPlantedHud');
+
+  const showCarrier = !!(live && me && me.alive && !me.spectator
+    && b?.carrierId === net.selfId && !b?.planted);
+  carrierEl?.classList.toggle('hidden', !showCarrier);
+
+  const showPlanted = !!(live && b?.planted);
+  plantedEl?.classList.toggle('hidden', !showPlanted);
+  if (showPlanted) {
+    const siteEl = document.getElementById('bombSiteLabel');
+    const timerEl = document.getElementById('bombPlantedTimer');
+    if (siteEl) siteEl.textContent = b.site || '?';
+    if (timerEl) timerEl.textContent = client.phaseRemaining();
+  }
+}
+
 function tryGrenade() {
   const me = client?.state.players[net?.selfId];
   if (!me || !me.alive || me.spectator) return;
@@ -552,6 +670,26 @@ function handleEventLocal(e) {
   }
   if (e.type === 'damage') {
     if (e.to === net.selfId) triggerDamageVignette();
+  }
+  if (e.type === 'bombAssigned') {
+    if (e.to === net.selfId) hud.centerShow('YOU HAVE THE SPIKE · plant it in site A or B', 3500);
+  }
+  if (e.type === 'bombPlanted') {
+    hud.centerShow(`SPIKE PLANTED · SITE ${e.site}`, 3200);
+    triggerFlash('#ff4a4a', 280);
+    playAbility();
+  }
+  if (e.type === 'bombDefused') {
+    hud.centerShow('SPIKE DEFUSED', 2400);
+    triggerFlash('#4aa3ff', 240);
+  }
+  if (e.type === 'bombDetonated') {
+    hud.centerShow('SPIKE DETONATED', 2400);
+    triggerFlash('#ff1030', 380);
+    playExplosion();
+  }
+  if (e.type === 'bombDropped' || e.type === 'bombPickup') {
+    // Visuals update via snapshot; nothing extra needed here.
   }
   if (e.type === 'roundEnd') {
     const myT = myTeam();
@@ -692,6 +830,9 @@ function loop() {
   updateGrenades(dt, scene, host ? (info) => host.handleGrenadeExplosion(info) : null);
   updateSmokes(dt);
   updateBarrierWalls(dt, scene);
+  updateBombMesh(scene, client?.state.bomb, dt);
+  tickBombHold();
+  updateBombHud();
 
   // UI render
   if (client) {
@@ -706,6 +847,7 @@ function loop() {
     hud.render({
       phase: s.phase, round: s.round, scoreA: s.scoreA, scoreB: s.scoreB,
       remainingSec: rem, me: isSpectator ? null : me, ammo, team: me?.team, events: client.recentEvents,
+      bomb: s.bomb,
     });
     hud.update(dt);
     scoreboard.render({ players: s.players, me, scoreA: s.scoreA, scoreB: s.scoreB });

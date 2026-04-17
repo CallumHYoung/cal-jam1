@@ -1,4 +1,7 @@
-import { WALLS, TEAM_PADS, SPAWNS } from '../world/map.js';
+import { WALLS, TEAM_PADS, SPAWNS, BOMB_SITES } from '../world/map.js';
+
+// World extent shown on the tactical map. Map is 140x140; we render ±70.
+const MAP_EXTENT = 70;
 
 // Full-screen tactical map overlay. Controller opens it via their Sky Smoke
 // ability; clicking on the map deploys a smoke there. ESC cancels.
@@ -59,16 +62,17 @@ export class MapPlacerUI {
 
   _worldToCanvas(x, z) {
     const cw = this.canvas.width, ch = this.canvas.height;
-    // world: x∈[-35..+35], z∈[-35..+35] → canvas top=defender(north)=-z
-    const sx = ((x + 35) / 70) * cw;
-    const sz = ((z + 35) / 70) * ch;
+    const span = MAP_EXTENT * 2;
+    const sx = ((x + MAP_EXTENT) / span) * cw;
+    const sz = ((z + MAP_EXTENT) / span) * ch;
     return { x: sx, y: sz };
   }
 
   _canvasToWorld(cx, cy) {
     const cw = this.canvas.width, ch = this.canvas.height;
-    const wx = (cx / cw) * 70 - 35;
-    const wz = (cy / ch) * 70 - 35;
+    const span = MAP_EXTENT * 2;
+    const wx = (cx / cw) * span - MAP_EXTENT;
+    const wz = (cy / ch) * span - MAP_EXTENT;
     return { x: wx, z: wz };
   }
 
@@ -81,25 +85,28 @@ export class MapPlacerUI {
     ctx.fillRect(0, 0, cw, ch);
 
     // side tint bands
-    const bandH = (6 / 70) * ch;
+    const span = MAP_EXTENT * 2;
+    const bandH = (10 / span) * ch;
     ctx.fillStyle = 'rgba(74,163,255,0.15)';
     ctx.fillRect(0, 0, cw, bandH);
     ctx.fillStyle = 'rgba(255,77,106,0.15)';
     ctx.fillRect(0, ch - bandH, cw, bandH);
 
-    // site labels
-    const sA = this._worldToCanvas(-22, 0);
-    const sB = this._worldToCanvas(22, 0);
-    ctx.fillStyle = 'rgba(255,204,51,0.1)';
-    const siteR = (3 / 70) * cw;
-    ctx.beginPath(); ctx.arc(sA.x, sA.y, siteR, 0, Math.PI*2); ctx.fill();
-    ctx.beginPath(); ctx.arc(sB.x, sB.y, siteR, 0, Math.PI*2); ctx.fill();
+    // bomb site labels (from BOMB_SITES)
+    ctx.fillStyle = 'rgba(255,204,51,0.12)';
+    for (const s of BOMB_SITES) {
+      const p = this._worldToCanvas(s.x, s.z);
+      const r = (s.r / span) * cw;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill();
+    }
     ctx.fillStyle = '#ffcc33';
     ctx.font = 'bold 22px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('A', sA.x, sA.y);
-    ctx.fillText('B', sB.x, sB.y);
+    for (const s of BOMB_SITES) {
+      const p = this._worldToCanvas(s.x, s.z);
+      ctx.fillText(s.id, p.x, p.y);
+    }
 
     // walls
     ctx.fillStyle = '#6a3d9e';
@@ -147,7 +154,7 @@ export class MapPlacerUI {
     if (this._mouseX != null) {
       const world = this._canvasToWorld(this._mouseX, this._mouseY);
       const p = this._worldToCanvas(world.x, world.z);
-      const r = (4.5 / 70) * cw;
+      const r = (4.5 / (MAP_EXTENT * 2)) * cw;
       ctx.fillStyle = 'rgba(196,192,208,0.3)';
       ctx.strokeStyle = '#c4c0d0';
       ctx.lineWidth = 2;
