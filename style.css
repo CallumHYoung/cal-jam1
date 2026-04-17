@@ -65,6 +65,11 @@ canvas#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: b
 #abilityRow { margin-top: 6px; display: flex; align-items: center; gap: 8px; justify-content: flex-end; color: var(--accent); }
 .abKey { background: var(--accent); color: #07040e; padding: 1px 6px; border-radius: 4px; font-weight: 800; font-size: 12px; }
 #abCharges { font-weight: 800; color: var(--accent2); min-width: 14px; text-align: center; background: rgba(78,240,255,0.12); border: 1px solid var(--accent2); border-radius: 4px; padding: 0 5px; }
+#grenadeRow { margin-top: 4px; display: flex; align-items: center; gap: 8px; justify-content: flex-end; color: var(--warn); }
+#grenadeRow.empty { opacity: 0.35; }
+.nadeKey { background: var(--warn); color: #07040e; padding: 1px 6px; border-radius: 4px; font-weight: 800; font-size: 12px; }
+.nadeName { letter-spacing: 2px; font-size: 12px; font-weight: 700; }
+#grenadeCount { font-weight: 800; color: var(--warn); min-width: 14px; text-align: center; background: rgba(255,204,85,0.12); border: 1px solid var(--warn); border-radius: 4px; padding: 0 5px; }
 
 #killfeed { position: absolute; top: 80px; right: 18px; display: flex; flex-direction: column; gap: 4px; max-width: 360px; }
 .kf { padding: 4px 10px; background: rgba(10, 5, 20, 0.65); border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
@@ -192,6 +197,8 @@ canvas#game { position: fixed; inset: 0; width: 100vw; height: 100vh; display: b
 #bombPlantedLabel { font-size: 11px; letter-spacing: 4px; color: var(--bad); font-weight: 800; }
 #bombPlantedLabel #bombSiteLabel { color: var(--gold); }
 #bombPlantedTimer { font-size: 40px; font-weight: 900; color: var(--bad); letter-spacing: 3px; font-variant-numeric: tabular-nums; text-shadow: 0 0 20px rgba(255,106,138,0.7); animation: timerPulse 0.9s infinite; }
+#defusePromptHud { position: fixed; bottom: 100px; left: 50%; transform: translateX(-50%); padding: 8px 16px; background: rgba(10,5,30,0.82); border: 1px solid var(--ally); border-radius: 8px; color: var(--ally); font-weight: 800; letter-spacing: 2px; font-size: 13px; z-index: 44; pointer-events: none; text-shadow: 0 0 12px rgba(74,163,255,0.4); }
+#defusePromptHud .key { background: var(--ally); color: #07040e; padding: 1px 7px; border-radius: 3px; font-weight: 900; margin: 0 2px; }
 #bombProgress { position: fixed; left: 50%; top: 60%; transform: translate(-50%, -50%); z-index: 46; pointer-events: none; text-align: center; min-width: 280px; }
 #bombProgressLabel { font-size: 14px; letter-spacing: 4px; color: var(--warn); font-weight: 800; margin-bottom: 8px; text-shadow: 0 0 12px rgba(0,0,0,0.8); }
 #bombProgressBar { height: 8px; background: rgba(10,5,20,0.82); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }

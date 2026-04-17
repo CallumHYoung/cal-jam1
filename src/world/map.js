@@ -149,17 +149,64 @@ export const WALLS = [
   { x: -12, z:  46, w: 3, d: 2, h: 1.6 },
   { x:  12, z:  46, w: 3, d: 2, h: 1.6 },
 
-  // ========== Extra big corner pieces near chokepoint gaps (tighten peeks) ==========
-  { x: -4, z: -24, w: 1.6, d: 3, h: 1.8 },
-  { x:  4, z: -24, w: 1.6, d: 3, h: 1.8 },
-  { x: -4, z:  24, w: 1.6, d: 3, h: 1.8 },
-  { x:  4, z:  24, w: 1.6, d: 3, h: 1.8 },
+  // ========== Extra big corner pieces near chokepoint gaps (tall — sniper can't see over) ==========
+  { x: -4, z: -24, w: 1.6, d: 3, h: WALL_H },
+  { x:  4, z: -24, w: 1.6, d: 3, h: WALL_H },
+  { x: -4, z:  24, w: 1.6, d: 3, h: WALL_H },
+  { x:  4, z:  24, w: 1.6, d: 3, h: WALL_H },
 
   // Posts near mid-lane to break line-of-sight
   { x: -20, z: -28, w: 0.8, d: 0.8, h: WALL_H },
   { x:  20, z: -28, w: 0.8, d: 0.8, h: WALL_H },
   { x: -20, z:  28, w: 0.8, d: 0.8, h: WALL_H },
   { x:  20, z:  28, w: 0.8, d: 0.8, h: WALL_H },
+
+  // ========== SIGHTLINE BREAKERS (sniper nerf) ==========
+  // Tall 2x2 pillars that chop long north-south corridors into short segments.
+  // Players can strafe around them; snipers can't pre-hold end-to-end.
+
+  // --- A-long lane zig-zag ---
+  { x: -56, z:  14, w: 2, d: 2, h: WALL_H },
+  { x: -63, z:   6, w: 2, d: 2, h: WALL_H },
+  { x: -52, z:  -2, w: 2, d: 2, h: WALL_H },
+  { x: -63, z: -10, w: 2, d: 2, h: WALL_H },
+  { x: -56, z: -18, w: 2, d: 2, h: WALL_H },
+  // --- B-long lane zig-zag (mirror) ---
+  { x:  56, z:  14, w: 2, d: 2, h: WALL_H },
+  { x:  63, z:   6, w: 2, d: 2, h: WALL_H },
+  { x:  52, z:  -2, w: 2, d: 2, h: WALL_H },
+  { x:  63, z: -10, w: 2, d: 2, h: WALL_H },
+  { x:  56, z: -18, w: 2, d: 2, h: WALL_H },
+
+  // --- Attacker-side mid lane (z=+22..+50) ---
+  { x: -16, z:  30, w: 2, d: 2, h: WALL_H },
+  { x:  16, z:  30, w: 2, d: 2, h: WALL_H },
+  { x:   0, z:  36, w: 2, d: 2, h: WALL_H },
+  { x: -26, z:  42, w: 2, d: 2, h: WALL_H },
+  { x:  26, z:  42, w: 2, d: 2, h: WALL_H },
+  // --- Defender-side mid lane (z=-22..-50, mirror) ---
+  { x: -16, z: -30, w: 2, d: 2, h: WALL_H },
+  { x:  16, z: -30, w: 2, d: 2, h: WALL_H },
+  { x:   0, z: -36, w: 2, d: 2, h: WALL_H },
+  { x: -26, z: -42, w: 2, d: 2, h: WALL_H },
+  { x:  26, z: -42, w: 2, d: 2, h: WALL_H },
+
+  // --- Short partial walls flanking mid tower (force tight corners) ---
+  { x: -10, z:  -9, w: 0.6, d: 4, h: WALL_H },  // vertical wall x=-10, z=-11..-7
+  { x:  10, z:  -9, w: 0.6, d: 4, h: WALL_H },
+  { x: -10, z:   9, w: 0.6, d: 4, h: WALL_H },
+  { x:  10, z:   9, w: 0.6, d: 4, h: WALL_H },
+  // Small pillars on the tower flanks to short-circuit flanking sightlines
+  { x: -20, z:  -4, w: 2, d: 2, h: WALL_H },
+  { x:  20, z:  -4, w: 2, d: 2, h: WALL_H },
+  { x: -20, z:   4, w: 2, d: 2, h: WALL_H },
+  { x:  20, z:   4, w: 2, d: 2, h: WALL_H },
+
+  // --- A/B short lane extra corner peeks ---
+  { x: -34, z:  20, w: 2, d: 2, h: WALL_H },  // tight corner at A-short + mid joint
+  { x:  34, z:  20, w: 2, d: 2, h: WALL_H },
+  { x: -34, z: -20, w: 2, d: 2, h: WALL_H },
+  { x:  34, z: -20, w: 2, d: 2, h: WALL_H },
 ];
 
 // Full-width barrier across the attacker side — blocks them leaving spawn

@@ -21,6 +21,8 @@ export class HUD {
     this.ammoReserve = document.getElementById('ammoReserve');
     this.abName = document.getElementById('abName');
     this.abCharges = document.getElementById('abCharges');
+    this.grenadeRow = document.getElementById('grenadeRow');
+    this.grenadeCount = document.getElementById('grenadeCount');
     this.killfeed = document.getElementById('killfeed');
     this.centerMsg = document.getElementById('centerMsg');
     this.hitMarker = document.getElementById('hitMarker');
@@ -86,6 +88,10 @@ export class HUD {
     const agent = AGENTS[me.agent || DEFAULT_AGENT];
     this.abName.textContent = agent?.abilities[0]?.name || 'Ability';
     this.abCharges.textContent = me.abilityCharges;
+
+    const nades = me.inventory?.grenades?.frag ?? 0;
+    if (this.grenadeCount) this.grenadeCount.textContent = nades;
+    this.grenadeRow?.classList.toggle('empty', nades <= 0);
     // killfeed
     this.killfeed.innerHTML = '';
     for (const ev of events.slice(-6)) {

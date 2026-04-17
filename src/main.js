@@ -626,6 +626,7 @@ function updateBombHud() {
 
   const carrierEl = document.getElementById('bombCarrierHud');
   const plantedEl = document.getElementById('bombPlantedHud');
+  const defuseEl = document.getElementById('defusePromptHud');
 
   const showCarrier = !!(live && me && me.alive && !me.spectator
     && b?.carrierId === net.selfId && !b?.planted);
@@ -639,6 +640,16 @@ function updateBombHud() {
     if (siteEl) siteEl.textContent = b.site || '?';
     if (timerEl) timerEl.textContent = client.phaseRemaining();
   }
+
+  // Defuse prompt: defender within range of planted spike, alive, not already
+  // holding a plant/defuse action.
+  let showDefuse = false;
+  if (live && me?.alive && !me.spectator && me.team === 'A' && b?.planted && Array.isArray(b.pos) && !bombHold) {
+    const dx = controller.pos.x - b.pos[0];
+    const dz = controller.pos.z - b.pos[1];
+    if (dx*dx + dz*dz <= BOMB.DEFUSE_RADIUS * BOMB.DEFUSE_RADIUS) showDefuse = true;
+  }
+  defuseEl?.classList.toggle('hidden', !showDefuse);
 }
 
 function tryGrenade() {
