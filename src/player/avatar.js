@@ -91,10 +91,12 @@ export function makeAvatar({ teamColor = '#6a8bff', accentColor = '#c64bff' } = 
   }
 
   function setDead(on) {
-    // tilt + lower (just a visual cue; real respawn is handled by host)
-    group.rotation.x = on ? Math.PI / 2 : 0;
-    group.position.y = on ? 0.15 : 0;
-    nameplate.style.opacity = on ? '0.3' : '1';
+    // Fully hide dead players — they're in fly-cam spectator mode from their
+    // own view and shouldn't be visible in the world.
+    for (const child of group.children) child.visible = !on;
+    group.rotation.x = 0;
+    group.position.y = 0;
+    nameplate.style.display = on ? 'none' : '';
   }
 
   function setSpectator(on) {

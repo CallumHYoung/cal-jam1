@@ -22,6 +22,8 @@ export class FPSController {
     this.speedMul = 1;     // set by ability buffs
     this.canMove = true;
     this.canLook = true;
+    this.fly = false;      // spectator free-flight (no gravity/collision)
+    this.flySpeed = 14;
 
     this.keys = {};
     this.locked = false;
@@ -87,47 +89,64 @@ export class FPSController {
 
   update(dt) {
     if (this.canMove) {
-      const wish = new THREE.Vector3();
-      if (this.keys['KeyW']) wish.add(this.getMoveForward());
-      if (this.keys['KeyS']) wish.sub(this.getMoveForward());
-      if (this.keys['KeyD']) wish.add(this.getMoveRight());
-      if (this.keys['KeyA']) wish.sub(this.getMoveRight());
-      if (wish.lengthSq() > 0) wish.normalize();
-
-      this.crouching = !!this.keys['ControlLeft'];
-      const base = this.crouching ? this.crouchSpeed : this.speed;
-      const target = wish.multiplyScalar(base * this.speedMul);
-
-      // horizontal velocity — snappy
-      this.vel.x += (target.x - this.vel.x) * Math.min(1, dt * 18);
-      this.vel.z += (target.z - this.vel.z) * Math.min(1, dt * 18);
-
-      // jump + gravity
-      this.vel.y -= 22 * dt;
-      if (this.onGround && this.keys['Space']) {
-        this.vel.y = 8.4; // reach ~1.6m — step-on-able onto 1.5m crates
+      if (this.fly) {
+        // Free-flight ghost mode: no gravity, no collision, WASD moves in
+        // camera direction, Space ascends, Shift descends.
+        const wish = new THREE.Vector3();
+        if (this.keys['KeyW']) wish.add(this.getForwardVec());
+        if (this.keys['KeyS']) wish.sub(this.getForwardVec());
+        if (this.keys['KeyD']) wish.add(this.getMoveRight());
+        if (this.keys['KeyA']) wish.sub(this.getMoveRight());
+        if (this.keys['Space']) wish.y += 1;
+        if (this.keys['ShiftLeft'] || this.keys['ControlLeft']) wish.y -= 1;
+        if (wish.lengthSq() > 0) wish.normalize();
+        this.pos.addScaledVector(wish, this.flySpeed * dt);
+        this.vel.set(0, 0, 0);
         this.onGround = false;
-      }
-
-      const newX = this.pos.x + this.vel.x * dt;
-      const newZ = this.pos.z + this.vel.z * dt;
-      const r = resolveMovement(this.pos.x, this.pos.z, newX, newZ, 0.35, this.pos.y);
-      this.pos.x = r.x;
-      this.pos.z = r.z;
-
-      this.pos.y += this.vel.y * dt;
-      const g = groundHeightAt(this.pos.x, this.pos.z, this.pos.y, 0.35);
-      if (this.pos.y <= g + 0.001) {
-        this.pos.y = g;
-        if (this.vel.y < 0) this.vel.y = 0;
-        this.onGround = true;
+        this.crouching = false;
       } else {
-        this.onGround = false;
+        const wish = new THREE.Vector3();
+        if (this.keys['KeyW']) wish.add(this.getMoveForward());
+        if (this.keys['KeyS']) wish.sub(this.getMoveForward());
+        if (this.keys['KeyD']) wish.add(this.getMoveRight());
+        if (this.keys['KeyA']) wish.sub(this.getMoveRight());
+        if (wish.lengthSq() > 0) wish.normalize();
+
+        this.crouching = !!this.keys['ControlLeft'];
+        const base = this.crouching ? this.crouchSpeed : this.speed;
+        const target = wish.multiplyScalar(base * this.speedMul);
+
+        // horizontal velocity — snappy
+        this.vel.x += (target.x - this.vel.x) * Math.min(1, dt * 18);
+        this.vel.z += (target.z - this.vel.z) * Math.min(1, dt * 18);
+
+        // jump + gravity
+        this.vel.y -= 22 * dt;
+        if (this.onGround && this.keys['Space']) {
+          this.vel.y = 8.4; // reach ~1.6m — step-on-able onto 1.5m crates
+          this.onGround = false;
+        }
+
+        const newX = this.pos.x + this.vel.x * dt;
+        const newZ = this.pos.z + this.vel.z * dt;
+        const r = resolveMovement(this.pos.x, this.pos.z, newX, newZ, 0.35, this.pos.y);
+        this.pos.x = r.x;
+        this.pos.z = r.z;
+
+        this.pos.y += this.vel.y * dt;
+        const g = groundHeightAt(this.pos.x, this.pos.z, this.pos.y, 0.35);
+        if (this.pos.y <= g + 0.001) {
+          this.pos.y = g;
+          if (this.vel.y < 0) this.vel.y = 0;
+          this.onGround = true;
+        } else {
+          this.onGround = false;
+        }
       }
     }
 
-    // update camera
-    const eyeH = this.crouching ? this.crouchEye : this.eye;
+    // update camera — fly mode already includes eye height in pos.y
+    const eyeH = this.fly ? 0 : (this.crouching ? this.crouchEye : this.eye);
     this.camera.position.set(this.pos.x, this.pos.y + eyeH, this.pos.z);
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.yaw;

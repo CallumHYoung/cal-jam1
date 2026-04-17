@@ -763,6 +763,52 @@ function wireUpPortal() {
   })();
 }
 
+// -------- spawn + life-state helpers ----------------------------------------
+// Tracks which phase we've teleported to a team spawn for — lets us retry the
+// teleport across later frames if team data arrived slightly late.
+let spawnedForPhase = null;
+// Local alive state edge-detection. Drives fly-spectator toggle + viewmodel.
+let wasAlive = true;
+
+function spawnAtTeamSide() {
+  const me = client?.state.players[net?.selfId];
+  if (!me?.team || me.spectator) return false;
+  const sp = SPAWNS[me.team === 'A' ? 'teamA' : 'teamB'];
+  const pick = sp[Math.floor(Math.random() * sp.length)];
+  controller.teleport(pick.x, pick.z, me.team === 'A' ? 0 : Math.PI);
+  return true;
+}
+
+function ensureSpawnForPhase(phase) {
+  if (phase !== PHASE.AGENT_SELECT && phase !== PHASE.BUY) return;
+  if (spawnedForPhase === phase) return;
+  if (spawnAtTeamSide()) spawnedForPhase = phase;
+}
+
+function applyLifeState(phase) {
+  const me = client?.state.players[net?.selfId];
+  const alive = !!(me && me.alive && !me.spectator);
+  const deathHud = document.getElementById('deathHud');
+
+  // Transition alive→dead during a live round → enter fly-cam.
+  if (wasAlive && !alive && phase === PHASE.ROUND_LIVE) {
+    controller.fly = true;
+    viewmodel.group.visible = false;
+    // Small upward nudge so you don't clip into your own corpse.
+    controller.pos.y = Math.max(controller.pos.y, 1.6);
+  }
+  // Transition back to alive (e.g., new round BUY) → leave fly-cam.
+  if (!wasAlive && alive) {
+    controller.fly = false;
+    viewmodel.group.visible = true;
+  }
+  wasAlive = alive;
+
+  // Death HUD — only during live gameplay phases where you'd be dead.
+  const showDeath = !alive && !me?.spectator && me?.team && (phase === PHASE.ROUND_LIVE || phase === PHASE.ROUND_END);
+  deathHud?.classList.toggle('hidden', !showDeath);
+}
+
 // -------- main loop ----------------------------------------------------------
 let lastT = performance.now();
 let lastPhase = null;
@@ -781,6 +827,9 @@ function loop() {
     onPhaseEnter(phase, lastPhase);
     lastPhase = phase;
   }
+  // Handle late-arriving team data + life state transitions each frame.
+  ensureSpawnForPhase(phase);
+  applyLifeState(phase);
 
   controller.update(dt);
 
@@ -895,12 +944,21 @@ function onPhaseEnter(phase, prev) {
   if (!client) return;
   const me = client.state.players[net.selfId];
 
+  // Reset spawn tracking each phase change so ensureSpawnForPhase re-teleports.
+  spawnedForPhase = null;
+
+  // Leaving fly-cam on any non-live phase — the respawn pathway handles
+  // re-enabling normal movement when alive comes back true.
+  if (phase !== PHASE.ROUND_LIVE && phase !== PHASE.ROUND_END) {
+    controller.fly = false;
+    viewmodel.group.visible = true;
+  }
+
   if (phase === PHASE.BUY) {
     // respawn camera at team spawn, refill ammo, update viewmodel
+    spawnAtTeamSide();
+    spawnedForPhase = PHASE.BUY;
     if (me?.team) {
-      const sp = SPAWNS[me.team === 'A' ? 'teamA' : 'teamB'];
-      const pick = sp[Math.floor(Math.random() * sp.length)];
-      controller.teleport(pick.x, pick.z, me.team === 'A' ? 0 : Math.PI);
       if (me.inventory) resetAmmoForInventory(me.inventory);
       if (me.weaponCurrent) viewmodel.setWeapon(me.weaponCurrent);
     }
@@ -922,12 +980,8 @@ function onPhaseEnter(phase, prev) {
   if (phase === PHASE.AGENT_SELECT) {
     controller.releasePointer();
     exitGameMode();
-    // Teleport to team's spawn area so you can see your team while picking an agent.
-    if (me?.team) {
-      const sp = SPAWNS[me.team === 'A' ? 'teamA' : 'teamB'];
-      const pick = sp[Math.floor(Math.random() * sp.length)];
-      controller.teleport(pick.x, pick.z, me.team === 'A' ? 0 : Math.PI);
-    }
+    spawnAtTeamSide();
+    spawnedForPhase = PHASE.AGENT_SELECT;
     setBarriersActive(true);
   }
   if (phase === PHASE.LOBBY) {
