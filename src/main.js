@@ -165,8 +165,11 @@ let client = null;     // ClientRuntime
   });
 
   net.onState((s) => {
+    // Host is the authority — ignore peer-broadcast state so a transient
+    // "wannabe-host" (fresh joiner who hasn't discovered peers yet) can't
+    // overwrite our own snapshot.
+    if (host) return;
     client.applySnapshot(s);
-    // host ignores incoming state; others adopt it
   });
 
   net.onEvent((e, fromId) => {
